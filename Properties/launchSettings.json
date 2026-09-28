@@ -1,0 +1,7 @@
+{
+  "profiles": {
+    "XBPrice (Package)": {
+      "commandName": "MsixPackage"
+    }
+  }
+}

@@ -1,0 +1,169 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    XBPrice —— 工作日钢市报价抓取工具（WinUI 3 / Windows App SDK）
+
+    打包形态：单工程 MSIX（Package.appxmanifest 放在工程根目录）。
+    这种形态即为 Microsoft Store 要求的“打包应用（Packaged App）”：
+      *  具有应用标识（Identity），支持磁贴、开始菜单、商店更新；
+      *  声明 runFullTrust 完整信任能力，可以调用 Win32 / WebView2 / 文件选择器；
+      *  依赖 Windows App Runtime 框架包（由打包工具自动写入 PackageDependency）。
+
+    命令行构建 / 打包：推荐用 VS 自带的 64 位 MSBuild 打包，它能找到 VC 工具链里的
+    mspdbcmf.exe，从而一并生成商店崩溃分析所需的 .appxsym 符号包：
+
+      & "$VS\MSBuild\Current\Bin\amd64\MSBuild.exe" XBPrice.csproj /restore `
+          /p:Configuration=Release /p:Platform=x64 `
+          /p:GenerateAppxPackageOnBuild=true /p:UapAppxPackageBuildMode=StoreAndSideload
+
+    产物（AppPackages\ 下）：
+      XBPrice_<版本>_x64.msixupload   ← 直接上传到合作伙伴中心
+      XBPrice_<版本>_x64_Test\        ← 侧载安装包 + Add-AppDevPackage.ps1
+    想同时支持 ARM64：把 /p:Platform=x64 换成 /p:Platform=ARM64 再执行一次，
+    两个 .msixupload 可在同一次提交里一起上传。
+
+    若改用 dotnet build 打包（找不到 mspdbcmf.exe），需加 -p:AppxSymbolPackageEnabled=false，
+    否则符号包步骤会报 MSB6011。
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+
+    <!-- Windows App SDK 2.5.1 的投影程序集基于 10.0.17763 编译，可运行于 Win10 1809 及以上；
+         编译用的 TargetPlatformVersion 取 26100，最低运行版本保持 17763 以覆盖 Win10。 -->
+    <TargetFramework>net10.0-windows10.0.26100.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+
+    <RootNamespace>XBPrice</RootNamespace>
+    <AssemblyName>XBPrice</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\price.ico</ApplicationIcon>
+
+    <Platforms>x86;x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+
+    <!-- WinUI 3 开关 -->
+    <UseWinUI>true</UseWinUI>
+    <WinUISDKReferences>false</WinUISDKReferences>
+
+    <!-- 单工程 MSIX 打包工具（Microsoft.Windows.SDK.BuildTools.MSIX）由此开关激活 -->
+    <EnableMsixTooling>true</EnableMsixTooling>
+    <WindowsPackageType>MSIX</WindowsPackageType>
+
+    <!-- 清单里的默认资源语言（界面为简体中文） -->
+    <DefaultLanguage>zh-CN</DefaultLanguage>
+
+    <!-- 只产出单个 .msix，不再按缩放级别拆分资源包，减少提交产物数量 -->
+    <AppxBundle>Never</AppxBundle>
+
+    <!--
+      生成 .appxsym 符号包（提交商店后可用于崩溃堆栈分析）。
+      符号包依赖 VC++ 工具链里的 mspdbcmf.exe，只有 64 位 MSBuild（VS 的
+      amd64\MSBuild.exe）或 VS 界面里的“创建应用包”才能正确定位到它；
+      用 dotnet build 打包时必须临时加 -p:AppxSymbolPackageEnabled=false。
+    -->
+    <AppxSymbolPackageEnabled>True</AppxSymbolPackageEnabled>
+
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <!--
+    dotnet build 不带 -p:Platform 时 Platform 默认为 AnyCPU，而 MSIX 打包要求明确架构
+    （否则报 “Packaged .NET applications with an app host exe cannot be ProcessorArchitecture
+    neutral”）。这里把默认值兜底成 x64；VS 会传入真实平台，不受影响。
+  -->
+  <PropertyGroup Condition="'$(Platform)' == '' or '$(Platform)' == 'AnyCPU' or '$(Platform)' == 'Any CPU'">
+    <Platform>x64</Platform>
+    <PlatformTarget>x64</PlatformTarget>
+  </PropertyGroup>
+
+  <!--
+    打包 / 发布时使用的配置文件（必须放在上面的 Platform 兜底之后，否则会拼出 win-AnyCPU.pubxml）。
+    win-*.pubxml 中设置了 SelfContained=true，即安装包里自带 .NET 运行时，
+    用户无需另外安装 .NET，符合商店“装好即可用”的要求。
+  -->
+  <PropertyGroup>
+    <PublishProfile>win-$(Platform).pubxml</PublishProfile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Windows App SDK。这里直接引用元包：
+        1) WinUI 3 所需的 WinUI / Foundation / InteractiveExperiences / WebView2 全部就位；
+        2) CommunityToolkit 依赖的是 WindowsAppSDK 1.6，直接引用可把版本统一到 2.5.1，
+           否则 1.6 与 2.3.9 两套 MSBuild 目标会互相冲突（CustomBeforeMicrosoftCommonTargets 报错）。
+    -->
+    <PackageReference Include="Microsoft.WindowsAppSDK" Version="2.5.1" />
+
+    <!--
+      2.x 起 Windows App SDK 组件化分发，元包会连带拉入 AI / ML / Search / Widgets 等组件。
+      其中 ML 的底层包 Microsoft.Windows.AI.MachineLearning 自带
+      onnxruntime.dll 与 DirectML.dll（四个架构合计 120MB 左右），本程序不做任何 AI 推理，
+      这里只排除这些原生库（native 资产），其余编译期引用保持不变，避免破坏组件自带的 MSBuild 校验。
+    -->
+    <PackageReference Include="Microsoft.Windows.AI.MachineLearning" Version="2.1.74" ExcludeAssets="native" />
+
+    <!-- MakeAppx / MakePri / SignTool，用于生成 .msix、.msixupload -->
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.4654" />
+
+    <!-- 单工程 MSIX 打包引擎（命令行 dotnet build 下同样生效） -->
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools.MSIX" Version="1.7.251221100" />
+
+    <!-- MainPage.xaml 中使用的 GridSplitter 控件 -->
+    <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.2.251219" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Manifest Include="$(ApplicationManifest)" />
+  </ItemGroup>
+
+  <!--
+    磁贴 / 商店图标。
+    WinUI 默认会把 Assets 下的所有文件都当作 Content 打进包（包括 Generate-AppTiles.ps1
+    这类源码素材），这里先整体移除，再只加回清单真正引用的、带缩放或目标尺寸限定符的图片。
+    清单里按逻辑名（去掉限定符）引用即可，例如 StoreLogo.scale-200.png → Assets\Tiles\StoreLogo.png。
+  -->
+  <ItemGroup>
+    <Content Remove="Assets\**" />
+
+    <Content Include="Assets\Tiles\StoreLogo.scale-*.png" />
+    <Content Include="Assets\Tiles\Square44x44.scale-*.png" />
+    <Content Include="Assets\Tiles\Square44x44.targetsize-*.png" />
+    <Content Include="Assets\Tiles\Square44x44.altform-unplated_targetsize-*.png" />
+    <Content Include="Assets\Tiles\Square44x44.altform-lightunplated_targetsize-*.png" />
+    <Content Include="Assets\Tiles\Square150x150.scale-*.png" />
+    <Content Include="Assets\Tiles\Square310x310.scale-*.png" />
+    <Content Include="Assets\Tiles\Wide310x150.scale-*.png" />
+    <Content Include="Assets\Tiles\SmallTile.scale-*.png" />
+    <Content Include="Assets\Tiles\SplashScreen.scale-*.png" />
+  </ItemGroup>
+
+  <!--
+    即使 Windows App SDK 包尚未还原，也让 VS 认出这是 MSIX 单工程，
+    从而启用“打包并发布”菜单与调试配置文件。
+  -->
+  <ItemGroup Condition="'$(DisableMsixProjectCapabilityAddedByProject)' != 'true' and '$(EnableMsixTooling)' == 'true'">
+    <ProjectCapability Include="Msix" />
+  </ItemGroup>
+  <PropertyGroup Condition="'$(DisableHasPackageAndPublishMenuAddedByProject)' != 'true' and '$(EnableMsixTooling)' == 'true'">
+    <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
+  </PropertyGroup>
+
+  <!--
+    发布设置：
+      * PublishTrimmed：WinUI 3 依赖 XAML 反射，裁剪会导致运行时崩溃，固定关闭；
+      * PublishReadyToRun：打包流程在没有 RuntimeIdentifier 时无法生成 R2R 映像
+        （NETSDK1094），这里固定关闭，避免 Release 打包失败。
+  -->
+  <PropertyGroup>
+    <PublishTrimmed>False</PublishTrimmed>
+    <PublishReadyToRun>False</PublishReadyToRun>
+    <GenerateAppInstallerFile>False</GenerateAppInstallerFile>
+    <AppxPackageSigningEnabled>False</AppxPackageSigningEnabled>
+    <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
+    <AppxAutoIncrementPackageRevision>True</AppxAutoIncrementPackageRevision>
+    <GenerateTestArtifacts>True</GenerateTestArtifacts>
+  </PropertyGroup>
+
+</Project>

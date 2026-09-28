@@ -1,0 +1,69 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+
+<!--
+  单工程 MSIX 清单。提交 Microsoft Store 前需要和合作伙伴中心里的值对齐：
+    *  Identity / Name     ← 合作伙伴中心 “包/标识/名称”（即保留的应用名称）
+    *  Identity / Publisher ← 合作伙伴中心 “包/标识/发布者”（CN=xxxxxxxx-xxxx-... 形式的 GUID）
+    *  Version 必须在每次提交时递增（1.0.0.0 → 1.0.1.0 ...）
+  其余节点保持不动即可，打包工具会自动补充 Windows App Runtime 的 PackageDependency，
+  并把下面的 $targetnametoken$ / $targetentrypoint$ 替换成实际可执行文件名与
+  Windows.FullTrustApplication 入口点。
+-->
+<Package
+  xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
+  xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  IgnorableNamespaces="uap rescap">
+
+  <Identity
+    Name="huangdaxia.XBPrice"
+    Publisher="CN=00543687-0CD2-4BAB-A8C1-74E7098AB9E5"
+    Version="1.0.0.0" />
+
+  <Properties>
+    <DisplayName>XBPrice</DisplayName>
+    <PublisherDisplayName>huangdaxia</PublisherDisplayName>
+    <Logo>Assets\Tiles\StoreLogo.png</Logo>
+  </Properties>
+
+  <Dependencies>
+    <!-- 只面向桌面 Windows，Win10 1809 起可用 -->
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0" />
+  </Dependencies>
+
+  <Resources>
+    <Resource Language="x-generate" />
+  </Resources>
+
+  <Applications>
+    <Application
+      Id="App"
+      Executable="$targetnametoken$.exe"
+      EntryPoint="$targetentrypoint$">
+      <uap:VisualElements
+        DisplayName="报价查询"
+        Description="按工作日抓取钢市报价网页数据并导出为 CSV"
+        BackgroundColor="transparent"
+        Square150x150Logo="Assets\Tiles\Square150x150.png"
+        Square44x44Logo="Assets\Tiles\Square44x44.png">
+        <uap:DefaultTile
+          Square71x71Logo="Assets\Tiles\SmallTile.png"
+          Square310x310Logo="Assets\Tiles\Square310x310.png"
+          Wide310x150Logo="Assets\Tiles\Wide310x150.png" />
+        <uap:SplashScreen Image="Assets\Tiles\SplashScreen.png" />
+      </uap:VisualElements>
+    </Application>
+  </Applications>
+
+  <Capabilities>
+    <!--
+      完整信任：WinUI 3 桌面应用必需，不能删除（删掉后 MakeAppx 会直接报 schema 校验错误）。
+      runFullTrust 属于“受限能力”：侧载安装无需审批；提交商店时，合作伙伴中心会提示
+      “The following restricted capabilities require approval…”，只需在“提交选项
+      （Submission options）”页说明用途，首次获批后后续更新无需再次申请。
+    -->
+    <rescap:Capability Name="runFullTrust" />
+    <!-- 抓取报价网页需要联网 -->
+    <Capability Name="internetClient" />
+  </Capabilities>
+</Package>

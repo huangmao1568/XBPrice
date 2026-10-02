@@ -351,25 +351,56 @@ namespace XBPrice
 
                 // 按行解析整张报价表，并发抓取所选日期范围内的全部工作日。
                 // 抓取与解析逻辑见 SteelPriceFetcher，入库见 SteelPriceRepository。
-                List<SteelPriceRecord> records = await SteelPriceFetcher.GetRecords(websites);
+                // 逐日容错：个别日期下载失败只记录日期，不影响其余日期入库。
+                FetchOutcome outcome = await SteelPriceFetcher.FetchAsync(websites);
+                List<SteelPriceRecord> records = outcome.Records;
                 this._lastRecords = records;
+
+                string startText = start.ToString("yyyy-MM-dd");
+                string endText = end.ToString("yyyy-MM-dd");
+
+                // 一天都没抓到：要么断网 / 站点不可用，要么网页结构变了导致解析为空。
+                // 两种情况都记失败日志后直接返回，避免把空批次当成功写进日志。
+                if (records.Count == 0)
+                {
+                    string reason = outcome.IsAllSucceeded
+                        ? $"页面已下载但未解析到数据，网页结构可能已调整（共 {outcome.TotalDays} 天）"
+                        : $"全部 {outcome.TotalDays} 天抓取失败：{string.Join("、", outcome.FailedDates)}";
+
+                    this._repository.WriteFetchLog(
+                        startText, endText, city, 0, 0, 0, "失败", reason);
+
+                    this.ShowStatus(reason, InfoBarSeverity.Error);
+                    return;
+                }
 
                 // 写入数据库（幂等：重复抓取同一天只刷新价格）
                 SaveResult saveResult = this._repository.Save(records);
                 this._repository.WriteFetchLog(
-                    start.ToString("yyyy-MM-dd"),
-                    end.ToString("yyyy-MM-dd"),
+                    startText,
+                    endText,
                     city,
                     saveResult.Total,
                     saveResult.Inserted,
                     saveResult.Updated,
-                    "成功");
+                    outcome.IsAllSucceeded ? "成功" : "部分失败",
+                    outcome.IsAllSucceeded ? null : $"失败日期：{string.Join("、", outcome.FailedDates)}");
 
                 this.BuildRows(records);
 
-                this.ShowStatus(
-                    $"已获取 {records.Count} 条记录，入库新增 {saveResult.Inserted} 条、更新 {saveResult.Updated} 条",
-                    InfoBarSeverity.Success);
+                string summary =
+                    $"已获取 {records.Count} 条记录，入库新增 {saveResult.Inserted} 条、更新 {saveResult.Updated} 条";
+                if (outcome.IsAllSucceeded)
+                {
+                    this.ShowStatus(summary, InfoBarSeverity.Success);
+                }
+                else
+                {
+                    this.ShowStatus(
+                        $"{summary}；{outcome.SucceededDays}/{outcome.TotalDays} 天成功，" +
+                        $"失败日期：{string.Join("、", outcome.FailedDates)}",
+                        InfoBarSeverity.Warning);
+                }
             }
             catch (Exception ex)
             {

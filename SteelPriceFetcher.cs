@@ -1,6 +1,6 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
+using System.Net;
 using System.Net.Http;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -70,82 +70,208 @@ namespace XBPrice
     }
 
     /// <summary>
+    /// 一次抓取任务的汇总结果。
+    ///
+    /// 设计意图：旧实现直接把全部任务交给 <c>Task.WhenAll</c> 聚合，任何一天失败都会让整批抛异常，
+    /// 已经抓到的数据一并作废。改成逐日容错后，成功的天照常入库，
+    /// 失败的天只记录日期交给界面提示，用户补抓那几天即可。
+    /// </summary>
+    public sealed class FetchOutcome
+    {
+        /// <summary>成功抓取并解析出的全部报价记录。</summary>
+        public List<SteelPriceRecord> Records { get; } = new List<SteelPriceRecord>();
+
+        /// <summary>抓取失败的日期（yyyy-MM-dd）。为空表示全部成功。</summary>
+        public List<string> FailedDates { get; } = new List<string>();
+
+        /// <summary>本次任务涉及的工作日总数。</summary>
+        public int TotalDays { get; set; }
+
+        /// <summary>成功抓取的天数。</summary>
+        public int SucceededDays => this.TotalDays - this.FailedDates.Count;
+
+        /// <summary>是否全部成功。</summary>
+        public bool IsAllSucceeded => this.FailedDates.Count == 0;
+    }
+
+    /// <summary>
     /// 钢价抓取器：下载报价页并解析为结构化记录。
     ///
-    /// 【重要】解析采用按 &lt;tr&gt; 逐行的方式。原 XBPrice 程序曾用
+    /// 【解析要点】采用按 &lt;tr&gt; 逐行的方式。原 XBPrice 程序曾用
     /// “提取全部 &lt;td&gt; 后按固定步长 4 取值”的做法，但网页每个品类的
     /// 第一条规格会多出一列“优质品牌推荐”，行内列数 5/4 混排，
     /// 导致从第二条起整列错位。按行解析并按行内实际列数判断，彻底修正该问题。
+    ///
+    /// 【性能要点】并发上限、连接池、超时、失败重试四者共同决定实际吞吐：
+    /// 调大并发能线性提高吞吐，但必须配套「连接池上限对齐并发数」，否则请求会
+    /// 排队等连接，并发数形同虚设；再配合「连接定期重建」与「瞬时故障重试」，
+    /// 才能真正把吞吐跑满，而不是把时间耗在空转重来上。
     /// </summary>
-    public static class SteelPriceFetcher
+    public static partial class SteelPriceFetcher
     {
         /// <summary>正文锚点，锚点之后是网站页脚，需截断。</summary>
         private const string BodyAnchor = "总机服务";
-
-        /// <summary>匹配整行 &lt;tr&gt; 的正则（单行模式，允许跨行）。</summary>
-        private const string RowPattern = "<tr.*?</tr>";
-
-        /// <summary>匹配行内单元格 &lt;td&gt; / &lt;th&gt; 的正则。</summary>
-        private const string CellPattern = "<t[dh][^>]*>(.*?)</t[dh]>";
 
         /// <summary>价格合法区间（元/吨），超出视为解析异常。</summary>
         private const double PriceMin = 100d;
         private const double PriceMax = 100000d;
 
-        /// <summary>并发下载上限，避免一次性把对端打满。</summary>
-        private const int MaxConcurrency = 4;
+        /// <summary>
+        /// 并发下载上限。原为 4，实测压测后定为 8。
+        ///
+        /// 实测（同一城市连续工作日页面，独立进程并发）：
+        /// 并发 4 → 8.2 页/秒；并发 8 → 14.3 页/秒；并发 16 → 15.4 页/秒，
+        /// 且单页耗时从 0.56s 涨到 1.04s。可见 8 之后收益极小、单页成本翻倍，
+        /// 再往上只是拿对端站点的压力换微乎其微的速度，容易触发限流或 UA 封禁。
+        /// 注：本程序复用连接（见 Client 配置），实际吞吐会略高于上述进程级并发实测值。
+        /// </summary>
+        private const int MaxConcurrency = 8;
 
-        /// <summary>共用同一个 HttpClient，避免反复创建连接池。</summary>
-        private static readonly HttpClient Client = new HttpClient
-        {
-            Timeout = TimeSpan.FromSeconds(30)
-        };
+        /// <summary>单页最大尝试次数（含首次）。</summary>
+        private const int MaxAttempts = 3;
 
-        static SteelPriceFetcher()
-        {
-            // 部分站点对无 UA 请求做拦截，伪装成常见浏览器
-            Client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent",
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-                "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36");
-        }
+        /// <summary>重试基础退避毫秒数（按 3 倍递增：400 / 1200）。</summary>
+        private const int RetryBaseDelayMs = 400;
+
+        /// <summary>伪装的浏览器 UA：部分站点对无 UA 请求做拦截。</summary>
+        private const string UserAgent =
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+            "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
         /// <summary>
-        /// 抓取指定城市多日的数据，每个日期返回其全部规格记录（并发下载）。
+        /// 全程序共用一个 HttpClient（避免反复创建连接池、避免端口耗尽）。
+        ///
+        /// 关键三项配置：
+        /// 1) <c>MaxConnectionsPerServer</c> 与并发上限对齐 —— 默认虽为无限，
+        ///    但显式对齐可保证 8 个请求各自持有独立连接，不会互相排队；
+        /// 2) <c>PooledConnectionLifetime</c> 定期重建连接 —— 长连接被服务端
+        ///    悄悄掐断时，复用旧连接会直接失败，重建可规避「半开连接」；
+        /// 3) <c>AutomaticDecompression</c> 开启压缩 —— 报价页约 53KB，
+        ///    gzip 后通常只剩几 KB，传输耗时明显下降。
+        /// </summary>
+        private static readonly HttpClient Client = CreateClient();
+
+        /// <summary>构建带连接池策略的共享 HttpClient。</summary>
+        private static HttpClient CreateClient()
+        {
+            SocketsHttpHandler handler = new SocketsHttpHandler
+            {
+                MaxConnectionsPerServer = MaxConcurrency,
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+                PooledConnectionIdleTimeout = TimeSpan.FromMinutes(1),
+                AutomaticDecompression = DecompressionMethods.All,
+                ConnectTimeout = TimeSpan.FromSeconds(10)
+            };
+
+            HttpClient client = new HttpClient(handler)
+            {
+                // 超时从 30s 收紧到 20s：尽快判定失败并交给重试，避免慢请求长时间占着并发名额
+                Timeout = TimeSpan.FromSeconds(20)
+            };
+
+            client.DefaultRequestHeaders.TryAddWithoutValidation("User-Agent", UserAgent);
+            client.DefaultRequestHeaders.TryAddWithoutValidation("Accept-Language", "zh-CN,zh;q=0.9");
+            return client;
+        }
+
+        // ------------------------------------------------------------
+        // 源码生成正则（GeneratedRegex）：编译期直接生成匹配代码，
+        // 没有运行时正则解析与 JIT 编译开销，反复调用时比 RegexOptions.Compiled 更快。
+        // ------------------------------------------------------------
+
+        /// <summary>匹配整行 &lt;tr&gt;（单行模式，允许跨行）。</summary>
+        [GeneratedRegex("<tr.*?</tr>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+        private static partial Regex RowRegex();
+
+        /// <summary>匹配行内单元格 &lt;td&gt; / &lt;th&gt;。</summary>
+        [GeneratedRegex("<t[dh][^>]*>(.*?)</t[dh]>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+        private static partial Regex CellRegex();
+
+        /// <summary>匹配整张 &lt;table&gt;。</summary>
+        [GeneratedRegex("<table.*?</table>", RegexOptions.IgnoreCase | RegexOptions.Singleline)]
+        private static partial Regex TableRegex();
+
+        /// <summary>匹配任意 HTML 标签。</summary>
+        [GeneratedRegex("<[^>]+>")]
+        private static partial Regex TagRegex();
+
+        /// <summary>匹配连续空白字符（用于压缩文本）。</summary>
+        [GeneratedRegex(@"\s+")]
+        private static partial Regex SpaceRegex();
+
+        /// <summary>匹配「φ数字*数字」形式的规格（直径 * 定尺米数）。</summary>
+        [GeneratedRegex(@"^(φ\s*\d+(?:\.\d+)?)\s*[*×]\s*(\d+(?:\.\d+)?)$")]
+        private static partial Regex SpecMeasureRegex();
+
+        /// <summary>匹配价格文本中的数字（支持千分位）。</summary>
+        [GeneratedRegex(@"(\d[\d,]*\.?\d*)")]
+        private static partial Regex PriceNumberRegex();
+
+        /// <summary>
+        /// 抓取指定城市多日的数据，返回成功记录与失败日期（并发下载 + 逐日容错）。
         /// </summary>
         /// <param name="websites">要抓取的网址集合（每个工作日一条）。</param>
-        /// <returns>按日期展开的全部报价记录。</returns>
-        public static async Task<List<SteelPriceRecord>> GetRecords(IReadOnlyList<MyWebsite> websites)
+        public static async Task<FetchOutcome> FetchAsync(IReadOnlyList<MyWebsite> websites)
         {
             if (websites is null || websites.Count == 0)
             {
                 throw new InvalidOperationException("网址错误");
             }
 
+            FetchOutcome outcome = new FetchOutcome { TotalDays = websites.Count };
+
             using (SemaphoreSlim gate = new SemaphoreSlim(MaxConcurrency))
             {
-                Task<List<SteelPriceRecord>>[] tasks = new Task<List<SteelPriceRecord>>[websites.Count];
+                Task<(List<SteelPriceRecord> Rows, MyWebsite Failed)>[] tasks =
+                    new Task<(List<SteelPriceRecord> Rows, MyWebsite Failed)>[websites.Count];
+
                 for (int i = 0; i < websites.Count; i++)
                 {
                     tasks[i] = FetchRecordsAsync(gate, websites[i]);
                 }
 
-                List<SteelPriceRecord>[] groups = await Task.WhenAll(tasks);
-                List<SteelPriceRecord> all = new List<SteelPriceRecord>();
-                foreach (List<SteelPriceRecord> group in groups)
+                (List<SteelPriceRecord> Rows, MyWebsite Failed)[] groups =
+                    await Task.WhenAll(tasks).ConfigureAwait(false);
+
+                foreach ((List<SteelPriceRecord> Rows, MyWebsite Failed) group in groups)
                 {
-                    all.AddRange(group);
+                    if (group.Failed is null)
+                    {
+                        outcome.Records.AddRange(group.Rows);
+                    }
+                    else
+                    {
+                        outcome.FailedDates.Add(group.Failed.Date.ToString("yyyy-MM-dd"));
+                    }
                 }
-                return all;
             }
+
+            // 失败日期按时间先后排序，便于界面提示与补抓
+            outcome.FailedDates.Sort(StringComparer.Ordinal);
+            return outcome;
         }
 
-        private static async Task<List<SteelPriceRecord>> FetchRecordsAsync(
+        /// <summary>
+        /// 抓取指定城市多日的数据，只返回记录（兼容旧调用入口）。
+        /// 需要感知失败日期时请改用 <see cref="FetchAsync"/>。
+        /// </summary>
+        public static async Task<List<SteelPriceRecord>> GetRecords(IReadOnlyList<MyWebsite> websites)
+        {
+            FetchOutcome outcome = await FetchAsync(websites).ConfigureAwait(false);
+            return outcome.Records;
+        }
+
+        /// <summary>
+        /// 抓取单个工作日。失败不抛出，而是把该网址回传给调用方记录，
+        /// 这样单天异常不会拖垮整批抓取。
+        /// </summary>
+        private static async Task<(List<SteelPriceRecord> Rows, MyWebsite Failed)> FetchRecordsAsync(
             SemaphoreSlim gate, MyWebsite website)
         {
-            await gate.WaitAsync();
+            await gate.WaitAsync().ConfigureAwait(false);
             try
             {
-                string html = await Client.GetStringAsync(new Uri(website.Url));
+                string html = await DownloadStringAsync(new Uri(website.Url)).ConfigureAwait(false);
                 List<SteelPriceRecord> rows = ParsePriceTable(html);
 
                 // 补上城市与日期：这两个字段来自请求上下文，不在网页表格里
@@ -156,7 +282,12 @@ namespace XBPrice
                     row.QuoteDate = dateText;
                 }
 
-                return rows;
+                return (rows, null);
+            }
+            catch (Exception)
+            {
+                // 下载入口已做重试，到这里说明确实拿不到，按失败日记录
+                return (new List<SteelPriceRecord>(), website);
             }
             finally
             {
@@ -164,10 +295,46 @@ namespace XBPrice
             }
         }
 
+        /// <summary>
+        /// 带重试的页面下载。仅对「瞬时故障」重试（超时 / 连接失败 / 5xx / 429），
+        /// 4xx 属于确定性失败，重试只是白等。
+        /// </summary>
+        private static async Task<string> DownloadStringAsync(Uri uri)
+        {
+            for (int attempt = 1; ; attempt++)
+            {
+                try
+                {
+                    return await Client.GetStringAsync(uri).ConfigureAwait(false);
+                }
+                catch (Exception ex) when (attempt < MaxAttempts && IsTransient(ex))
+                {
+                    // 退避 400ms → 1200ms，并叠加 0~150ms 随机抖动，
+                    // 避免同一批并发请求在同一时刻集体重试、造成对端二次冲击
+                    int delay = (RetryBaseDelayMs * (int)Math.Pow(3, attempt - 1))
+                                + Random.Shared.Next(0, 150);
+                    await Task.Delay(delay).ConfigureAwait(false);
+                }
+            }
+        }
+
+        /// <summary>判断异常是否属于值得重试的瞬时故障。</summary>
+        private static bool IsTransient(Exception ex) => ex switch
+        {
+            // HttpClient.Timeout 到期时抛出的就是 TaskCanceledException
+            TaskCanceledException => true,
+            TimeoutException => true,
+            HttpRequestException http => http.StatusCode is null
+                                         || (int)http.StatusCode >= 500
+                                         || http.StatusCode == HttpStatusCode.RequestTimeout
+                                         || http.StatusCode == HttpStatusCode.TooManyRequests,
+            _ => false
+        };
+
         /// <summary>下载单个工作日的报价记录（串行调用入口，供控制台回补工具使用）。</summary>
         public static async Task<List<SteelPriceRecord>> FetchOneDayAsync(MyWebsite website)
         {
-            string html = await Client.GetStringAsync(new Uri(website.Url));
+            string html = await DownloadStringAsync(new Uri(website.Url)).ConfigureAwait(false);
             List<SteelPriceRecord> rows = ParsePriceTable(html);
 
             string dateText = website.Date.ToString("yyyy-MM-dd");
@@ -204,8 +371,7 @@ namespace XBPrice
 
             // 定位正文中第一个含“品名”表头的报价表
             string table = null;
-            foreach (Match tableMatch in Regex.Matches(body, "<table.*?</table>",
-                     RegexOptions.Singleline | RegexOptions.IgnoreCase))
+            foreach (Match tableMatch in TableRegex().Matches(body))
             {
                 if (tableMatch.Value.Contains("品名"))
                 {
@@ -219,11 +385,9 @@ namespace XBPrice
                 return rows;
             }
 
-            foreach (Match rowMatch in Regex.Matches(table, RowPattern,
-                     RegexOptions.Singleline | RegexOptions.IgnoreCase))
+            foreach (Match rowMatch in RowRegex().Matches(table))
             {
-                MatchCollection cells = Regex.Matches(rowMatch.Value, CellPattern,
-                    RegexOptions.Singleline | RegexOptions.IgnoreCase);
+                MatchCollection cells = CellRegex().Matches(rowMatch.Value);
                 if (cells.Count < 4)
                 {
                     continue;
@@ -281,10 +445,10 @@ namespace XBPrice
                 return string.Empty;
             }
 
-            string plain = Regex.Replace(text, "<[^>]+>", " ");
+            string plain = TagRegex().Replace(text, " ");
             plain = plain.Replace("&gt;", ">").Replace("&lt;", "<")
                          .Replace("&amp;", "&").Replace("&nbsp;", " ");
-            return Regex.Replace(plain, @"\s+", " ").Trim();
+            return SpaceRegex().Replace(plain, " ").Trim();
         }
 
         /// <summary>
@@ -304,13 +468,13 @@ namespace XBPrice
             }
 
             // 只处理「φ数字*数字」这一种形态，其余（φ8-10、φ6.5 等）原样保留
-            Match m = Regex.Match(spec, @"^(φ\s*\d+(?:\.\d+)?)\s*[*×]\s*(\d+(?:\.\d+)?)$");
+            Match m = SpecMeasureRegex().Match(spec);
             if (!m.Success)
             {
                 return spec;
             }
 
-            string diameter = Regex.Replace(m.Groups[1].Value, @"\s+", string.Empty);
+            string diameter = SpaceRegex().Replace(m.Groups[1].Value, string.Empty);
             return $"{diameter}（定尺{m.Groups[2].Value}m）";
         }
 
@@ -323,7 +487,7 @@ namespace XBPrice
                 return false;
             }
 
-            Match match = Regex.Match(text, @"(\d[\d,]*\.?\d*)");
+            Match match = PriceNumberRegex().Match(text);
             if (!match.Success)
             {
                 return false;

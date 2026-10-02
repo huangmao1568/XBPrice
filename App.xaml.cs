@@ -33,6 +33,10 @@ namespace XBPrice
             MainWindow = new Window();
             MainWindow.Title = "报价查询";
 
+            // 让内容延伸到标题栏区域，去掉系统标题栏下方的那条留白。
+            // 开启后由页面内的自定义标题栏（TitleBar 控件）接管拖动与窗口按钮留白。
+            MainWindow.ExtendsContentIntoTitleBar = true;
+
             Frame rootFrame = new Frame();
             rootFrame.NavigationFailed += OnNavigationFailed;
 

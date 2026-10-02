@@ -112,6 +112,13 @@
 
     <!-- MainPage.xaml 中使用的 GridSplitter 控件 -->
     <PackageReference Include="CommunityToolkit.WinUI.Controls.Sizers" Version="8.2.251219" />
+
+    <!--
+      EF Core + SQLite 数据访问层。
+      使用 Microsoft.EntityFrameworkCore.Sqlite（内含 Microsoft.Data.Sqlite
+      与 SQLitePCLRaw.bundle_e_sqlite3 原生库），无需再单独引用 Microsoft.Data.Sqlite。
+    -->
+    <PackageReference Include="Microsoft.EntityFrameworkCore.Sqlite" Version="10.0.12" />
   </ItemGroup>
 
   <ItemGroup>

@@ -8,8 +8,39 @@
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
     mc:Ignorable="d">
 
-    <!--  页面本身不设背景，让窗口的亚克力/云母背景透出来  -->
-    <Grid Padding="16,4,16,16">
+    <!--
+        页面根布局：
+        启用 ExtendsContentIntoTitleBar 后，内容会延伸到窗口最顶端，
+        因此这里用三行——自定义标题栏、正文、状态栏，
+        底部不再叠加系统标题栏留白。
+        页面本身不设背景，让窗口的亚克力背景透出来。
+    -->
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+        </Grid.RowDefinitions>
+
+        <!--  自定义标题栏：接管拖动与右上角窗口按钮留白，替代系统标题栏  -->
+        <TitleBar
+            x:Name="appTitleBar"
+            Grid.Row="0"
+            IsBackButtonVisible="False"
+            IsPaneToggleButtonVisible="False"
+            Subtitle="工作日价格查询">
+            <TitleBar.IconSource>
+                <ImageIconSource ImageSource="Assets/Tiles/StoreLogo.png" />
+            </TitleBar.IconSource>
+        </TitleBar>
+
+        <!--
+            正文区：贴满窗口（AppPagePadding = 0），各卡片之间用 8px 缝隙分隔，
+            缝隙处透出窗口底衬，形成自然的区块划分。
+        -->
+        <Grid
+            Grid.Row="1"
+            Padding="{ThemeResource AppPagePadding}"
+            RowSpacing="{ThemeResource AppSpacingS}">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -19,12 +50,9 @@
         <!--  ================= 顶部工具栏 =================  -->
         <Border
             Grid.Row="0"
-            Padding="20,14"
-            Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-            BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-            BorderThickness="1"
-            CornerRadius="8">
-            <Grid ColumnSpacing="16" RowSpacing="14">
+            Padding="{ThemeResource AppToolbarPadding}"
+            Style="{ThemeResource AppCardStyle}">
+            <Grid ColumnSpacing="{ThemeResource AppSpacingL}" RowSpacing="{ThemeResource AppSpacingM}">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto" />
                     <RowDefinition Height="Auto" />
@@ -41,10 +69,7 @@
                     VerticalAlignment="Center"
                     Spacing="2">
                     <TextBlock Text="工作日价格查询" Style="{ThemeResource SubtitleTextBlockStyle}" />
-                    <TextBlock
-                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
-                        Style="{ThemeResource CaptionTextBlockStyle}"
-                        Text="选择城市与日期范围，抓取报价数据并导出为 CSV" />
+                    <TextBlock Style="{ThemeResource AppSecondaryTextStyle}" Text="选择城市与日期范围，抓取报价数据并导出为 CSV" />
                 </StackPanel>
 
                 <!--  操作按钮  -->
@@ -53,18 +78,28 @@
                     Grid.Column="1"
                     VerticalAlignment="Center"
                     Orientation="Horizontal"
-                    Spacing="8">
+                    Spacing="{ThemeResource AppSpacingS}">
                     <ProgressRing
                         x:Name="ring"
                         Width="22"
                         Height="22"
                         Visibility="Collapsed" />
                     <Button
+                        x:Name="openDatabaseButton"
+                        Click="OpenDatabaseButton_Click"
+                        Style="{ThemeResource AccentButtonStyle}"
+                        ToolTipService.ToolTip="查看已入库数据的月均价格看板">
+                        <StackPanel Orientation="Horizontal" Spacing="{ThemeResource AppSpacingS}">
+                            <FontIcon FontSize="14" Glyph="&#xE8F1;" />
+                            <TextBlock Text="数据库" />
+                        </StackPanel>
+                    </Button>
+                    <Button
                         x:Name="fetchButton"
                         Click="FetchButton_Click"
                         Style="{ThemeResource AccentButtonStyle}"
                         ToolTipService.ToolTip="抓取所选日期范围内的报价">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
+                        <StackPanel Orientation="Horizontal" Spacing="{ThemeResource AppSpacingS}">
                             <FontIcon FontSize="14" Glyph="&#xE896;" />
                             <TextBlock Text="获取数据" />
                         </StackPanel>
@@ -74,7 +109,7 @@
                         Click="ExportButton_Click"
                         IsEnabled="False"
                         ToolTipService.ToolTip="把当前结果导出为 CSV 文件">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
+                        <StackPanel Orientation="Horizontal" Spacing="{ThemeResource AppSpacingS}">
                             <FontIcon FontSize="14" Glyph="&#xE74E;" />
                             <TextBlock Text="导出 CSV" />
                         </StackPanel>
@@ -86,7 +121,7 @@
                     Grid.Row="1"
                     Grid.ColumnSpan="2"
                     Orientation="Horizontal"
-                    Spacing="16">
+                    Spacing="{ThemeResource AppSpacingL}">
                     <ToggleSwitch
                         x:Name="inputModeToggle"
                         MinWidth="140"
@@ -120,37 +155,70 @@
         </Border>
 
         <!--  ================= 主体内容 =================  -->
-        <Grid Grid.Row="1" Margin="0,16,0,0">
+        <Grid Grid.Row="1">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="3*" MinWidth="280" />
                 <ColumnDefinition Width="Auto" />
-                <ColumnDefinition Width="2*" MinWidth="260" />
+                <ColumnDefinition Width="2*" MinWidth="320" />
             </Grid.ColumnDefinitions>
 
             <!--  网页预览  -->
-            <Border
-                Grid.Column="0"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8">
+            <Border Grid.Column="0" Style="{ThemeResource AppCardStyle}">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <StackPanel
-                        Grid.Row="0"
-                        Padding="14,12"
-                        Orientation="Horizontal"
-                        Spacing="8">
-                        <FontIcon
-                            FontSize="14"
-                            Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                            Glyph="&#xE774;" />
-                        <TextBlock Style="{ThemeResource BodyStrongTextBlockStyle}" Text="网页预览" />
-                    </StackPanel>
+                    <!--  预览头：标题 + 缩放控制  -->
+                    <Grid Grid.Row="0" Padding="{ThemeResource AppPanelHeaderPadding}">
+                        <StackPanel Orientation="Horizontal" Spacing="{ThemeResource AppSpacingS}">
+                            <FontIcon Style="{ThemeResource AppPanelHeaderIconStyle}" Glyph="&#xE774;" />
+                            <TextBlock Style="{ThemeResource AppPanelHeaderTextStyle}" Text="网页预览" />
+                        </StackPanel>
+
+                        <StackPanel
+                            HorizontalAlignment="Right"
+                            Orientation="Horizontal"
+                            Spacing="{ThemeResource AppSpacingXS}">
+                            <TextBlock
+                                x:Name="zoomText"
+                                MinWidth="44"
+                                VerticalAlignment="Center"
+                                Style="{ThemeResource AppSecondaryTextStyle}"
+                                Text="100%"
+                                TextAlignment="Right" />
+                            <Button
+                                x:Name="zoomOutButton"
+                                Width="32"
+                                Height="32"
+                                Padding="0"
+                                Click="ZoomOutButton_Click"
+                                ToolTipService.ToolTip="缩小">
+                                <FontIcon FontSize="12" Glyph="&#xE738;" />
+                            </Button>
+                            <Button
+                                x:Name="zoomInButton"
+                                Width="32"
+                                Height="32"
+                                Padding="0"
+                                Click="ZoomInButton_Click"
+                                ToolTipService.ToolTip="放大">
+                                <FontIcon FontSize="12" Glyph="&#xE710;" />
+                            </Button>
+                            <Button
+                                x:Name="zoomFitButton"
+                                Height="32"
+                                Padding="10,0"
+                                Click="ZoomFitButton_Click"
+                                ToolTipService.ToolTip="自动缩放到整页可见">
+                                <StackPanel Orientation="Horizontal" Spacing="6">
+                                    <FontIcon FontSize="12" Glyph="&#xE9A6;" />
+                                    <TextBlock Style="{ThemeResource AppSecondaryTextStyle}" Text="整页" />
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
 
                     <!--  WinUI 3 中旧版 WebView(EdgeHTML) 已移除，改用基于 Chromium 的 WebView2  -->
                     <WebView2
@@ -161,6 +229,11 @@
             </Border>
 
             <!--  可拖拽的列分隔条  -->
+            <!--
+              注意：GridSplitter 不能套用 TargetType="Border" 的样式
+              （AppSplitterStyle），类型不匹配会导致 XAML 加载抛异常、应用启动即崩。
+              这里直接内联属性。
+            -->
             <controls:GridSplitter
                 Grid.Column="1"
                 Width="12"
@@ -168,76 +241,139 @@
                 HorizontalAlignment="Center"
                 VerticalAlignment="Stretch"
                 Background="{ThemeResource ControlStrokeColorDefaultBrush}"
-                CornerRadius="3"
                 ResizeBehavior="PreviousAndNext"
                 ResizeDirection="Columns"
                 ToolTipService.ToolTip="拖动以调整左右宽度" />
 
-            <!--  数据列表  -->
-            <Border
-                Grid.Column="2"
-                Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
-                BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                BorderThickness="1"
-                CornerRadius="8">
+            <!--  数据列表：结构化表格  -->
+            <Border Grid.Column="2" Style="{ThemeResource AppCardStyle}">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
 
-                    <Grid Grid.Row="0" Padding="14,12">
-                        <StackPanel Orientation="Horizontal" Spacing="8">
-                            <FontIcon
-                                FontSize="14"
-                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                Glyph="&#xE8A9;" />
-                            <TextBlock Style="{ThemeResource BodyStrongTextBlockStyle}" Text="报价数据" />
+                    <Grid Grid.Row="0" Padding="{ThemeResource AppPanelHeaderPadding}">
+                        <StackPanel Orientation="Horizontal" Spacing="{ThemeResource AppSpacingS}">
+                            <FontIcon Style="{ThemeResource AppPanelHeaderIconStyle}" Glyph="&#xE8A9;" />
+                            <TextBlock Style="{ThemeResource AppPanelHeaderTextStyle}" Text="报价数据" />
+                            <TextBlock
+                                x:Name="rowCountText"
+                                Style="{ThemeResource AppRowCountTextStyle}"
+                                Text="" />
                         </StackPanel>
-                        <TextBlock
-                            x:Name="emptyHint"
-                            HorizontalAlignment="Right"
-                            VerticalAlignment="Center"
-                            Foreground="{ThemeResource TextFillColorTertiaryBrush}"
-                            Style="{ThemeResource CaptionTextBlockStyle}"
-                            Text="暂无数据" />
                     </Grid>
 
-                    <GridView
-                        x:Name="dataGrid"
-                        Grid.Row="1"
-                        Margin="8,0,8,8"
-                        IsItemClickEnabled="False"
-                        ItemsSource="{x:Bind Model}"
-                        SelectionMode="None">
-                        <GridView.ItemTemplate>
-                            <DataTemplate x:DataType="local:ColumnData">
-                                <Border
-                                    Width="228"
-                                    Margin="4"
-                                    Padding="12"
-                                    Background="{ThemeResource CardBackgroundFillColorSecondaryBrush}"
-                                    BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
-                                    BorderThickness="1"
-                                    CornerRadius="6">
-                                    <StackPanel Spacing="6">
-                                        <StackPanel Orientation="Horizontal" Spacing="8">
-                                            <FontIcon
-                                                FontSize="13"
-                                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
-                                                Glyph="&#xE787;" />
-                                            <TextBlock Style="{ThemeResource BodyStrongTextBlockStyle}" Text="{x:Bind DateText}" />
-                                        </StackPanel>
+                    <Grid Grid.Row="1" Margin="8,0,8,8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="*" />
+                        </Grid.RowDefinitions>
+
+                        <!--  表头：列宽与下方行模板保持一致  -->
+                        <!--  右 padding 10+16-10：16 为 ScrollBarSize，抵消滚动条占位  -->
+                        <Border Grid.Row="0" Style="{ThemeResource AppTableHeaderStyle}">
+                            <Grid Padding="10,6,26,6">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="80" />
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="72" />
+                                    <ColumnDefinition Width="82" />
+                                    <ColumnDefinition Width="72" />
+                                </Grid.ColumnDefinitions>
+                                <TextBlock
+                                    Grid.Column="0"
+                                    Style="{ThemeResource CaptionTextBlockStyle}"
+                                    Text="日期" />
+                                <TextBlock
+                                    Grid.Column="1"
+                                    Style="{ThemeResource CaptionTextBlockStyle}"
+                                    Text="品名 / 规格" />
+                                <TextBlock
+                                    Grid.Column="2"
+                                    Style="{ThemeResource CaptionTextBlockStyle}"
+                                    Text="牌号" />
+                                <TextBlock
+                                    Grid.Column="3"
+                                    HorizontalAlignment="Right"
+                                    Style="{ThemeResource CaptionTextBlockStyle}"
+                                    Text="价格" />
+                                <TextBlock
+                                    Grid.Column="4"
+                                    HorizontalAlignment="Right"
+                                    Style="{ThemeResource CaptionTextBlockStyle}"
+                                    Text="涨跌" />
+                            </Grid>
+                        </Border>
+
+                        <ListView
+                            x:Name="dataList"
+                            Grid.Row="1"
+                            IsItemClickEnabled="False"
+                            ItemContainerStyle="{ThemeResource AppTableRowContainerStyle}"
+                            ItemsSource="{x:Bind Model}"
+                            SelectionMode="None">
+                            <ListView.ItemTemplate>
+                                <DataTemplate x:DataType="local:QuoteRow">
+                                    <Grid
+                                        Height="30"
+                                        Padding="10,0">
+                                        <Grid.ColumnDefinitions>
+                                            <ColumnDefinition Width="80" />
+                                            <ColumnDefinition Width="*" />
+                                            <ColumnDefinition Width="72" />
+                                            <ColumnDefinition Width="82" />
+                                            <ColumnDefinition Width="72" />
+                                        </Grid.ColumnDefinitions>
                                         <TextBlock
-                                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                                            Grid.Column="0"
+                                            VerticalAlignment="Center"
+                                            Style="{ThemeResource AppSecondaryTextStyle}"
+                                            Text="{x:Bind DateText}" />
+                                        <TextBlock
+                                            Grid.Column="1"
+                                            VerticalAlignment="Center"
                                             Style="{ThemeResource CaptionTextBlockStyle}"
-                                            Text="{x:Bind Values}"
-                                            TextWrapping="Wrap" />
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </GridView.ItemTemplate>
-                    </GridView>
+                                            Text="{x:Bind NameText}"
+                                            TextTrimming="CharacterEllipsis"
+                                            ToolTipService.ToolTip="{x:Bind NameText}" />
+                                        <TextBlock
+                                            Grid.Column="2"
+                                            VerticalAlignment="Center"
+                                            Style="{ThemeResource AppSecondaryTextStyle}"
+                                            Text="{x:Bind Grade}"
+                                            TextTrimming="CharacterEllipsis"
+                                            ToolTipService.ToolTip="{x:Bind Grade}" />
+                                        <TextBlock
+                                            Grid.Column="3"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Center"
+                                            Style="{ThemeResource CaptionTextBlockStyle}"
+                                            Text="{x:Bind PriceText}" />
+                                        <TextBlock
+                                            Grid.Column="4"
+                                            HorizontalAlignment="Right"
+                                            VerticalAlignment="Center"
+                                            Foreground="{x:Bind TrendBrush}"
+                                            Style="{ThemeResource CaptionTextBlockStyle}"
+                                            Text="{x:Bind TrendText}" />
+                                    </Grid>
+                                </DataTemplate>
+                            </ListView.ItemTemplate>
+                        </ListView>
+
+                        <!--  空状态提示，覆盖在列表区域  -->
+                        <StackPanel
+                            x:Name="emptyPanel"
+                            Grid.Row="1"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Spacing="{ThemeResource AppSpacingS}">
+                            <FontIcon Style="{ThemeResource AppEmptyStateIconStyle}" Glyph="&#xE7C3;" />
+                            <TextBlock Style="{ThemeResource AppEmptyStateTextStyle}" Text="暂无数据" />
+                            <TextBlock Style="{ThemeResource AppEmptyStateHintStyle}" Text="点上方「获取数据」开始抓取所选日期范围的报价" />
+                        </StackPanel>
+                    </Grid>
                 </Grid>
             </Border>
         </Grid>
@@ -246,7 +382,7 @@
         <InfoBar
             x:Name="statusBar"
             Grid.Row="2"
-            Margin="0,12,0,0"
             IsOpen="False" />
+        </Grid>
     </Grid>
 </Page>

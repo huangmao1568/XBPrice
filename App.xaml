@@ -2,14 +2,14 @@
     x:Class="XBPrice.App"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:XBPrice"
-    RequestedTheme="Light">
+    xmlns:local="using:XBPrice">
 
     <Application.Resources>
         <ResourceDictionary>
             <ResourceDictionary.MergedDictionaries>
-                <!-- WinUI 3 必须显式合并控件主题资源，否则控件没有样式 -->
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
+                <!--  设计令牌：颜色、圆角、间距、文本样式统一维护在此文件  -->
+                <ResourceDictionary Source="ms-appx:///Themes/ThemeTokens.xaml" />
             </ResourceDictionary.MergedDictionaries>
         </ResourceDictionary>
     </Application.Resources>

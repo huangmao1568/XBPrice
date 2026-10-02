@@ -1,0 +1,277 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================================
+  ThemeTokens.xaml — XBPrice 设计令牌
+  ============================================================================
+  本文件把项目里散落的硬编码视觉值收敛成语义化令牌，供 App.xaml 合并。
+
+  设计依据：Windows 11 / Fluent 2 规范
+    · 顶层容器圆角 8px、页内控件圆角 4px（Windows 11 三级几何体系）
+    · 间距基于 4px 网格
+    · 颜色分「浅色 / 深色 / 高对比度」三套字典，随系统主题切换
+
+  色值来源：本机 Windows App SDK 的主题资源文件
+           Microsoft.WinUI/Themes/generic.xaml（与 WinUI 内置令牌同源）
+
+  注意：此处只定义 WinUI 内置没有、或项目需要统一收敛的令牌。
+        内置令牌（TextFillColorPrimaryBrush、CardBackgroundFillColorDefaultBrush 等）
+        请直接 {ThemeResource} 引用，不要在此重复定义，否则会破坏系统主题适配。
+
+  重要：ResourceDictionary.ThemeDictionaries 必须放在本文件**最末尾**。
+        WinUI 的 XAML 编译器要求隐式内容集合（_Items）只能被赋值一次，
+        若在 ThemeDictionaries 前后都写资源项，会报 WMC0035
+        “Duplication assignment to the '_Items' property”。
+  ============================================================================
+-->
+<ResourceDictionary
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!-- ========================================================================
+         1. 圆角 Geometry
+         取代各处硬编码的 CornerRadius="8" / "6"
+         ======================================================================== -->
+
+    <!-- 顶层容器：卡片、面板、对话框（Fluent 规定 8px） -->
+    <CornerRadius x:Key="AppOverlayCornerRadius">8</CornerRadius>
+
+    <!-- 页内元素：按钮、输入框、下拉框（Fluent 规定 4px） -->
+    <CornerRadius x:Key="AppControlCornerRadius">4</CornerRadius>
+
+    <!-- 胶囊形：标签、徽章 -->
+    <CornerRadius x:Key="AppPillCornerRadius">9999</CornerRadius>
+
+
+    <!-- ========================================================================
+         2. 间距 Spacing（4px 网格）
+         ======================================================================== -->
+
+    <!-- 4 — 图标与文字之间 -->
+    <x:Double x:Key="AppSpacingXS">4</x:Double>
+
+    <!-- 8 — 按钮之间、控件之间 -->
+    <x:Double x:Key="AppSpacingS">8</x:Double>
+
+    <!-- 12 — 内容区块之间 -->
+    <x:Double x:Key="AppSpacingM">12</x:Double>
+
+    <!-- 16 — 卡片内边距、表面与内容之间 -->
+    <x:Double x:Key="AppSpacingL">16</x:Double>
+
+    <!-- 24 — 页面四周安全边距 -->
+    <x:Double x:Key="AppSpacingXL">24</x:Double>
+
+    <!--
+        页面根容器内边距：全部归零，让卡片直接铺满到窗口边缘。
+        配合 ExtendsContentIntoTitleBar 使用，窗口内不再有额外留白；
+        页面顶部与标题栏之间靠各页面自身的 RowSpacing 拉开距离。
+    -->
+    <Thickness x:Key="AppPagePadding">0</Thickness>
+
+    <!-- 卡片内边距 -->
+    <Thickness x:Key="AppCardPadding">16,12</Thickness>
+
+    <!-- 工具条（页面顶部操作区）内边距 -->
+    <Thickness x:Key="AppToolbarPadding">20,14</Thickness>
+
+    <!-- 卡片内小标题行内边距 -->
+    <Thickness x:Key="AppPanelHeaderPadding">14,10</Thickness>
+
+
+    <!-- ========================================================================
+         3. 文本与图标样式
+         ======================================================================== -->
+
+    <!-- 卡片内的小标题行文字（如「网页预览」「报价数据」） -->
+    <Style x:Key="AppPanelHeaderTextStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextBlockStyle}">
+        <Setter Property="VerticalAlignment" Value="Center"/>
+    </Style>
+
+    <!-- 卡片标题行前置的图标 -->
+    <Style x:Key="AppPanelHeaderIconStyle" TargetType="FontIcon">
+        <Setter Property="FontSize" Value="14"/>
+        <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+    </Style>
+
+    <!-- 次要说明文字（卡片副标题、字段提示） -->
+    <Style x:Key="AppSecondaryTextStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextBlockStyle}">
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
+    </Style>
+
+    <!-- 三级文字（序号、路径、计数等最弱信息） -->
+    <Style x:Key="AppTertiaryTextStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextBlockStyle}">
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}"/>
+    </Style>
+
+    <!-- 行内计数标签（「共 N 条」） -->
+    <Style x:Key="AppRowCountTextStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextBlockStyle}">
+        <Setter Property="VerticalAlignment" Value="Center"/>
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}"/>
+    </Style>
+
+
+    <!-- ========================================================================
+         4. 卡片与容器样式
+         把原先在每个 Border 上重复 5 行属性收敛成一次 Style 引用
+         ======================================================================== -->
+
+    <!--
+        标准卡片：卡面底色 + 细描边。
+
+        说明：页面已改为「内容贴满窗口」（AppPagePadding = 0），
+        此时四角若保留 8px 圆角，会在贴边的直角处露出底衬缺口，观感反而更差；
+        因此这里把圆角与描边都去掉，让卡片真正铺满整块区域。
+        若日后恢复页面留白，把 CornerRadius 改回 AppOverlayCornerRadius 即可。
+    -->
+    <Style x:Key="AppCardStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorDefaultBrush}"/>
+        <Setter Property="BorderBrush" Value="{ThemeResource CardStrokeColorDefaultBrush}"/>
+        <Setter Property="BorderThickness" Value="0"/>
+        <Setter Property="CornerRadius" Value="0"/>
+    </Style>
+
+    <!-- 内嵌面板：更轻的底色（表头、内层分区） -->
+    <Style x:Key="AppInnerPanelStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorSecondaryBrush}"/>
+        <Setter Property="CornerRadius" Value="{StaticResource AppControlCornerRadius}"/>
+    </Style>
+
+    <!-- 表格表头：次级底色 + 底部细分隔线，与数据行形成层级 -->
+    <!-- 右内边距注意：滚动条占位(ScrollBarSize=16)加在内层 Grid 上，
+         不在此处设 Padding，避免与内层 Padding 叠加。
+         表头 Border 与下方 ListView 都用 Margin="8,..."，宽度基准一致。 -->
+    <Style x:Key="AppTableHeaderStyle" TargetType="Border">
+        <Setter Property="Background" Value="{ThemeResource CardBackgroundFillColorSecondaryBrush}"/>
+        <Setter Property="BorderBrush" Value="{ThemeResource DividerStrokeColorDefaultBrush}"/>
+        <Setter Property="BorderThickness" Value="0,0,0,1"/>
+        <Setter Property="CornerRadius" Value="{StaticResource AppControlCornerRadius}"/>
+    </Style>
+
+    <!-- 表格数据行的容器样式（统一行高与对齐） -->
+    <Style x:Key="AppTableRowContainerStyle" TargetType="ListViewItem">
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="MinHeight" Value="32"/>
+        <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
+    </Style>
+<!-- ========================================================================
+         5. 分隔条
+         ======================================================================== -->
+
+    <!--
+      可拖拽的列分隔条（仅适用于 Border 外框）。
+
+      ⚠️ 严禁把这个样式套到 CommunityToolkit.WinUI.Controls.GridSplitter 上！
+      GridSplitter 与 Border 没有继承关系，TargetType 不匹配会在 XAML 加载阶段
+      抛未处理异常，表现为「应用启动即崩，异常码 0xc000027b，模块 Microsoft.UI.Xaml.dll」，
+      且 .NET Runtime 事件日志为空（纯原生层崩溃，没有托管堆栈可查）。
+
+      GridSplitter 请直接内联属性：
+        <controls:GridSplitter Width="12" Margin="4,0"
+                               HorizontalAlignment="Center" VerticalAlignment="Stretch"
+                               Background="{ThemeResource ControlStrokeColorDefaultBrush}"
+                               ResizeBehavior="PreviousAndNext" ResizeDirection="Columns" />
+
+      排查提示：若日后新增样式并套用时崩溃，先怀疑「TargetType 与被套元素类型不匹配」，
+      这类错误在编译期不报错，只在运行时 XAML 解析时炸。
+    -->
+    <Style x:Key="AppSplitterStyle" TargetType="Border">
+        <Setter Property="Width" Value="12"/>
+        <Setter Property="CornerRadius" Value="3"/>
+        <Setter Property="Background" Value="{ThemeResource ControlStrokeColorDefaultBrush}"/>
+    </Style>
+
+
+    <!-- ========================================================================
+         6. 空状态
+         ======================================================================== -->
+
+    <!-- 空状态图标：统一 32px 并使用主题感知的弱化前景色 -->
+    <Style x:Key="AppEmptyStateIconStyle" TargetType="FontIcon">
+        <Setter Property="FontSize" Value="32"/>
+        <Setter Property="Foreground" Value="{ThemeResource AppEmptyIconBrush}"/>
+    </Style>
+
+    <!-- 空状态主文案 -->
+    <Style x:Key="AppEmptyStateTextStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyTextBlockStyle}">
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+        <Setter Property="TextAlignment" Value="Center"/>
+        <Setter Property="MaxWidth" Value="280"/>
+    </Style>
+
+    <!-- 空状态引导文案（比主文案更弱，用于「下一步做什么」） -->
+    <Style x:Key="AppEmptyStateHintStyle" TargetType="TextBlock" BasedOn="{StaticResource CaptionTextBlockStyle}">
+        <Setter Property="HorizontalAlignment" Value="Center"/>
+        <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}"/>
+        <Setter Property="TextWrapping" Value="Wrap"/>
+        <Setter Property="TextAlignment" Value="Center"/>
+        <Setter Property="MaxWidth" Value="280"/>
+    </Style>
+
+
+    <!-- ========================================================================
+         7. 涨跌色 Financial Colors（主题字典 —— 必须位于文件最末）
+         中国行情惯例：涨红、跌绿。
+
+         浅色主题下用较深的红/绿（保证白底可读）；
+         深色主题下改用较亮的红/绿（保证深底可读）。
+         这套值直接对应 WinUI 内置的 SystemFillColorCritical / Success。
+         ======================================================================== -->
+    <ResourceDictionary.ThemeDictionaries>
+
+        <!-- 深色主题（WinUI 约定：Default 键即为深色） -->
+        <ResourceDictionary x:Key="Default">
+
+            <!-- 涨：深色下用亮红 -->
+            <SolidColorBrush x:Key="AppTrendUpBrush" Color="#FF99A4"/>
+
+            <!-- 跌：深色下用亮绿 -->
+            <SolidColorBrush x:Key="AppTrendDownBrush" Color="#6CCB5F"/>
+
+            <!-- 持平：中性灰 -->
+            <SolidColorBrush x:Key="AppTrendFlatBrush" Color="#87FFFFFF"/>
+
+            <!-- 空状态图标：深色下需要更亮才看得清 -->
+            <SolidColorBrush x:Key="AppEmptyIconBrush" Color="#66FFFFFF"/>
+
+        </ResourceDictionary>
+
+        <!-- 浅色主题 -->
+        <ResourceDictionary x:Key="Light">
+
+            <!-- 涨：浅色下用深红 -->
+            <SolidColorBrush x:Key="AppTrendUpBrush" Color="#C42B1C"/>
+
+            <!-- 跌：浅色下用深绿 -->
+            <SolidColorBrush x:Key="AppTrendDownBrush" Color="#0F7B0F"/>
+
+            <!-- 持平：中性灰 -->
+            <SolidColorBrush x:Key="AppTrendFlatBrush" Color="#72000000"/>
+
+            <SolidColorBrush x:Key="AppEmptyIconBrush" Color="#72000000"/>
+
+        </ResourceDictionary>
+
+        <!--
+          高对比度：交由系统色控制，不做红绿区分（避免色盲用户无法辨识）。
+
+          注意：这里必须用静态字面量颜色，不能写 Color="{ThemeResource SystemColorWindowTextColor}"。
+          原因是 SolidColorBrush.Color 是 Color 结构体，而当前 Windows App SDK
+          里 SystemColorWindowTextColor 解析出来是 Brush 类型，类型不匹配会在
+          ResourceDictionary 加载阶段抛 XAML 解析异常（表现为启动即崩 0xc000027b）。
+        -->
+
+        <!-- 高对比度（浅） -->
+        <ResourceDictionary x:Key="HighContrast">
+
+            <SolidColorBrush x:Key="AppTrendUpBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="AppTrendDownBrush" Color="#FFFFFF"/>
+            <SolidColorBrush x:Key="AppTrendFlatBrush" Color="#C0C0C0"/>
+            <SolidColorBrush x:Key="AppEmptyIconBrush" Color="#C0C0C0"/>
+
+        </ResourceDictionary>
+
+    </ResourceDictionary.ThemeDictionaries>
+
+</ResourceDictionary>

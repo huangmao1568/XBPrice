@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using Microsoft.UI.Xaml.Media;
 
 namespace XBPrice
 {
@@ -32,5 +33,33 @@ namespace XBPrice
 
         /// <summary>该列的全部取值，以换行分隔。</summary>
         public string Values { get; set; }
+    }
+
+    /// <summary>
+    /// 报价表格的一行（右侧数据看板用）。
+    /// 只承载展示所需字段，避免把整个实体直接绑到界面。
+    /// </summary>
+    public class QuoteRow
+    {
+        /// <summary>报价日期，展示为 MM-dd 以节省列宽。</summary>
+        public string DateText { get; set; }
+
+        /// <summary>“品名 规格”合并文本。</summary>
+        public string NameText { get; set; }
+
+        /// <summary>牌号 / 材质。</summary>
+        public string Grade { get; set; }
+
+        /// <summary>价格（元/吨），千分位格式。</summary>
+        public string PriceText { get; set; }
+
+        /// <summary>涨跌文本，如 +20 / -10 / —。</summary>
+        public string TrendText { get; set; }
+
+        /// <summary>
+        /// 涨跌文字的刷子：涨红、跌绿、无变化灰。
+        /// 国内行情惯例——涨用红色、跌用绿色。
+        /// </summary>
+        public SolidColorBrush TrendBrush { get; set; }
     }
 }

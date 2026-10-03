@@ -55,7 +55,13 @@ namespace XBPrice
         /// <summary>原始数据表数据源。</summary>
         public ObservableCollection<RawRow> RawRows { get; } = new ObservableCollection<RawRow>();
 
-        /// <summary>进入页面后加载筛选选项与首屏数据。</summary>
+        /// <summary>
+        /// 进入页面后加载筛选选项与首屏数据。
+        ///
+        /// 筛选下拉框在每次进入页面时都重新填充：主页面新抓取的数据可能带来
+        /// 新的城市 / 规格 / 牌号，若只在首次加载时填充，用户得退出重进才能选到。
+        /// 页面已在 Frame 中缓存，用 Navigate 重新创建实例即可触发本方法。
+        /// </summary>
         private void DatabasePage_Loaded(object sender, RoutedEventArgs e)
         {
             if (this._loaded)
@@ -65,12 +71,6 @@ namespace XBPrice
 
             this._loaded = true;
 
-            // 显示数据库完整路径，并额外标注存储位置类型。
-            // 数据库固定放在「文档」目录下（独立于 MSIX 包沙箱），
-            // 卸载 / 重新部署应用都不会删除该文件，便于用户自行备份。
-            string path = this._repository.DatabasePath;
-            this.dbPathText.Text = $"{path}   （存于文档目录，卸载应用不会丢失）";
-            this.dbPathText.Tag = path;
             this.PopulateFilters();
             this.Reload();
         }
@@ -139,13 +139,6 @@ namespace XBPrice
                 return;
             }
 
-            this.Reload();
-        }
-
-        /// <summary>手动刷新。</summary>
-        private void RefreshButton_Click(object sender, RoutedEventArgs e)
-        {
-            this.PopulateFilters();
             this.Reload();
         }
 

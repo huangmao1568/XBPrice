@@ -86,20 +86,11 @@
                     <Button
                         x:Name="exportButton"
                         Click="ExportButton_Click"
+                        Style="{ThemeResource AccentButtonStyle}"
                         ToolTipService.ToolTip="把当前视图的数据导出为 CSV（可自选文件名与保存位置）">
                         <StackPanel Orientation="Horizontal" Spacing="{StaticResource AppSpacingS}">
                             <FontIcon FontSize="14" Glyph="&#xE9D5;" />
                             <TextBlock Text="导出" />
-                        </StackPanel>
-                    </Button>
-                    <Button
-                        x:Name="refreshButton"
-                        Click="RefreshButton_Click"
-                        Style="{ThemeResource AccentButtonStyle}"
-                        ToolTipService.ToolTip="按当前筛选重新读取数据库">
-                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource AppSpacingS}">
-                            <FontIcon FontSize="14" Glyph="&#xE72C;" />
-                            <TextBlock Text="刷新" />
                         </StackPanel>
                     </Button>
                 </StackPanel>
@@ -161,13 +152,6 @@
                         VerticalAlignment="Bottom"
                         Header="规格"
                         SelectionChanged="Filter_SelectionChanged" />
-                    <TextBlock
-                        x:Name="dbPathText"
-                        MaxWidth="300"
-                        VerticalAlignment="Bottom"
-                        Style="{StaticResource AppTertiaryTextStyle}"
-                        Text=""
-                        TextTrimming="CharacterEllipsis" />
                 </StackPanel>
             </Grid>
         </Border>
@@ -193,7 +177,7 @@
                     <TextBlock Style="{StaticResource AppSecondaryTextStyle}" Text="整体月均价" />
                     <TextBlock
                         x:Name="kpiAvg"
-                        Style="{ThemeResource SubtitleTextBlockStyle}"
+                        Style="{StaticResource AppAccentNumberStyle}"
                         Text="—" />
                 </StackPanel>
             </Border>
@@ -207,7 +191,7 @@
                     <TextBlock Style="{StaticResource AppSecondaryTextStyle}" Text="价格区间" />
                     <TextBlock
                         x:Name="kpiRange"
-                        Style="{ThemeResource BodyStrongTextBlockStyle}"
+                        Style="{StaticResource AppAccentCountStyle}"
                         Text="—"
                         TextWrapping="Wrap" />
                 </StackPanel>
@@ -353,6 +337,7 @@
                             <TextBlock
                                 Grid.Column="8"
                                 HorizontalAlignment="Center"
+                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
                                 Style="{ThemeResource CaptionTextBlockStyle}"
                                 Text="月均价" />
                             <TextBlock

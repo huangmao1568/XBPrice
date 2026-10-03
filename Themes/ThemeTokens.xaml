@@ -109,6 +109,29 @@
         <Setter Property="Foreground" Value="{ThemeResource TextFillColorTertiaryBrush}"/>
     </Style>
 
+    <!--
+      强调数字样式：用于界面上最核心的那个价格数字（各页的月均价）。
+
+      颜色取系统强调色（AccentTextFillColorPrimaryBrush）——
+      它会跟随用户在 Windows「设置 → 个性化 → 颜色」里选定的强调色变化，
+      切换深浅色主题也会自动换成对应可读的值，因此无需在此硬编码任何色值。
+
+      用途严格限定为「每屏一个」的核心指标，避免强调色到处出现而失去重点。
+      其余文字一律保持中性灰，涨跌另用红绿（见第 7 节行情色）。
+    -->
+    <Style x:Key="AppAccentNumberStyle" TargetType="TextBlock" BasedOn="{StaticResource SubtitleTextBlockStyle}">
+        <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+    </Style>
+
+    <!--
+      次级强调数字：用于 KPI 卡片里需要区分但不该抢主视觉的数字
+      （如「覆盖月份」「涉及城市」等计数）。同样跟随系统强调色，但字号更小。
+    -->
+    <Style x:Key="AppAccentCountStyle" TargetType="TextBlock" BasedOn="{StaticResource BodyStrongTextBlockStyle}">
+        <Setter Property="Foreground" Value="{ThemeResource AccentTextFillColorPrimaryBrush}"/>
+    </Style>
+
 
     <!-- ========================================================================
          4. 卡片与容器样式

@@ -87,7 +87,6 @@
                     <Button
                         x:Name="openDatabaseButton"
                         Click="OpenDatabaseButton_Click"
-                        Style="{ThemeResource AccentButtonStyle}"
                         ToolTipService.ToolTip="查看已入库数据的月均价格看板">
                         <StackPanel Orientation="Horizontal" Spacing="{ThemeResource AppSpacingS}">
                             <FontIcon FontSize="14" Glyph="&#xE8F1;" />
@@ -131,17 +130,27 @@
                         Toggled="InputModeToggle_Toggled" />
                     <ComboBox
                         x:Name="cityPicker"
-                        MinWidth="150"
+                        Width="110"
                         VerticalAlignment="Bottom"
                         Header="城市"
+                        HorizontalAlignment="Center"
+                        HorizontalContentAlignment="Center"
                         ItemsSource="{x:Bind Cities}" />
                     <TextBox
                         x:Name="cityInput"
-                        MinWidth="150"
+                        Width="110"
                         VerticalAlignment="Bottom"
                         Header="城市拼音"
+                        HorizontalAlignment="Center"
                         IsEnabled="False"
                         PlaceholderText="例如 shanghai" />
+                    <!--
+                      日期控件保持 WinUI 原生宽度（不压缩）。
+                      曾试过用固定宽度容器把它从约 240px 压到 71px，
+                      但月/年/日三段文字被挤掉，日期完全看不清；
+                      且 DatePicker 不能改自身 Width（会裁掉日历按钮导致点不开），
+                      压缩外层容器只是视觉遮挡，不解决根本问题。故恢复原样。
+                    -->
                     <DatePicker
                         x:Name="startDatePicker"
                         VerticalAlignment="Bottom"
@@ -293,11 +302,12 @@
                                     Grid.Column="2"
                                     Style="{ThemeResource CaptionTextBlockStyle}"
                                     Text="牌号" />
-                                <TextBlock
-                                    Grid.Column="3"
-                                    HorizontalAlignment="Right"
-                                    Style="{ThemeResource CaptionTextBlockStyle}"
-                                    Text="价格" />
+<TextBlock
+                                Grid.Column="3"
+                                HorizontalAlignment="Right"
+                                Foreground="{ThemeResource AccentTextFillColorPrimaryBrush}"
+                                Style="{ThemeResource CaptionTextBlockStyle}"
+                                Text="价格" />
                                 <TextBlock
                                     Grid.Column="4"
                                     HorizontalAlignment="Right"
@@ -348,7 +358,7 @@
                                             Grid.Column="3"
                                             HorizontalAlignment="Right"
                                             VerticalAlignment="Center"
-                                            Style="{ThemeResource CaptionTextBlockStyle}"
+                                            Style="{ThemeResource BodyStrongTextBlockStyle}"
                                             Text="{x:Bind PriceText}" />
                                         <TextBlock
                                             Grid.Column="4"

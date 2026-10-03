@@ -349,15 +349,39 @@ namespace XBPrice
                 // 确认存在工作日后才导航，避免把周末或非法日期页面加载进来
                 this.webview.Source = new Uri(websites[0].Url);
 
+                string startText = start.ToString("yyyy-MM-dd");
+                string endText = end.ToString("yyyy-MM-dd");
+
+                // 判重：库里已有的日期不再向目标网站重复请求，
+                // 既省流量与时间，也避免站点把我们当爬虫反复拦。
+                // 判定粒度为「天」——某天该城市已有任意一条报价即视为已入库。
+                List<string> candidateDates = websites
+                    .Select(w => w.Date.ToString("yyyy-MM-dd"))
+                    .ToList();
+
+                List<string> existingDates = this._repository.FilterExistingDates(city, candidateDates);
+
+                List<MyWebsite> toFetch = existingDates.Count == 0
+                    ? websites
+                    : websites
+                        .Where(w => !existingDates.Contains(w.Date.ToString("yyyy-MM-dd")))
+                        .ToList();
+
+                // 全部日期都已入库，无需任何网络请求
+                if (toFetch.Count == 0)
+                {
+                    this.LoadExistingIntoView(city, existingDates, websites.Count);
+                    this._repository.WriteFetchLog(
+                        startText, endText, city, 0, 0, 0, "跳过", $"所选 {websites.Count} 天均已入库");
+                    return;
+                }
+
                 // 按行解析整张报价表，并发抓取所选日期范围内的全部工作日。
                 // 抓取与解析逻辑见 SteelPriceFetcher，入库见 SteelPriceRepository。
                 // 逐日容错：个别日期下载失败只记录日期，不影响其余日期入库。
-                FetchOutcome outcome = await SteelPriceFetcher.FetchAsync(websites);
+                FetchOutcome outcome = await SteelPriceFetcher.FetchAsync(toFetch);
                 List<SteelPriceRecord> records = outcome.Records;
                 this._lastRecords = records;
-
-                string startText = start.ToString("yyyy-MM-dd");
-                string endText = end.ToString("yyyy-MM-dd");
 
                 // 一天都没抓到：要么断网 / 站点不可用，要么网页结构变了导致解析为空。
                 // 两种情况都记失败日志后直接返回，避免把空批次当成功写进日志。
@@ -376,6 +400,32 @@ namespace XBPrice
 
                 // 写入数据库（幂等：重复抓取同一天只刷新价格）
                 SaveResult saveResult = this._repository.Save(records);
+
+                // 跳过的日期从库里补出来，与本次抓到的合并，
+                // 保证屏幕表格覆盖所选区间的全部工作日，不会因判重而少几天。
+                if (existingDates.Count > 0)
+                {
+                    records = records
+                        .Concat(this._repository.QueryByCityDates(city, existingDates))
+                        .OrderBy(r => r.QuoteDate, StringComparer.Ordinal)
+                        .ToList();
+                    this._lastRecords = records;
+                }
+
+                string status = outcome.IsAllSucceeded ? "成功" : "部分失败";
+                List<string> notes = new List<string>();
+
+                if (existingDates.Count > 0)
+                {
+                    notes.Add($"跳过已入库 {existingDates.Count} 天（{DescribeDates(existingDates)}）");
+                }
+
+                if (!outcome.IsAllSucceeded)
+                {
+                    notes.Add($"{outcome.SucceededDays}/{outcome.TotalDays} 天抓取成功，失败："
+                              + string.Join("、", outcome.FailedDates));
+                }
+
                 this._repository.WriteFetchLog(
                     startText,
                     endText,
@@ -383,23 +433,26 @@ namespace XBPrice
                     saveResult.Total,
                     saveResult.Inserted,
                     saveResult.Updated,
-                    outcome.IsAllSucceeded ? "成功" : "部分失败",
-                    outcome.IsAllSucceeded ? null : $"失败日期：{string.Join("、", outcome.FailedDates)}");
+                    status,
+                    notes.Count > 0 ? string.Join("；", notes) : null);
 
                 this.BuildRows(records);
 
                 string summary =
                     $"已获取 {records.Count} 条记录，入库新增 {saveResult.Inserted} 条、更新 {saveResult.Updated} 条";
-                if (outcome.IsAllSucceeded)
+
+                if (notes.Count == 0)
                 {
                     this.ShowStatus(summary, InfoBarSeverity.Success);
                 }
+                else if (outcome.IsAllSucceeded)
+                {
+                    // 有跳过但全部抓取成功：用提示级而非警告级，避免用户误以为出错
+                    this.ShowStatus($"{summary}；{string.Join("；", notes)}", InfoBarSeverity.Success);
+                }
                 else
                 {
-                    this.ShowStatus(
-                        $"{summary}；{outcome.SucceededDays}/{outcome.TotalDays} 天成功，" +
-                        $"失败日期：{string.Join("、", outcome.FailedDates)}",
-                        InfoBarSeverity.Warning);
+                    this.ShowStatus($"{summary}；{string.Join("；", notes)}", InfoBarSeverity.Warning);
                 }
             }
             catch (Exception ex)
@@ -411,6 +464,84 @@ namespace XBPrice
                 this.SetBusy(false);
                 this.UpdateEmptyHint();
             }
+        }
+
+        /// <summary>
+        /// 把「库里已有、因此跳过抓取」的日期直接读出来填进表格。
+        ///
+        /// 用于所选区间的全部工作日都已入库的情况：此时一次网络请求都不发，
+        /// 但用户按下按钮仍应看到完整报价表，而不是空白或错误提示。
+        /// </summary>
+        /// <param name="city">城市拼音。</param>
+        /// <param name="dates">已入库的日期集合（yyyy-MM-dd）。</param>
+        /// <param name="totalDays">所选区间的工作日总数，用于提示文案。</param>
+        private void LoadExistingIntoView(string city, List<string> dates, int totalDays)
+        {
+            List<SteelPriceRecord> records =
+                this._repository.QueryByCityDates(city, dates);
+
+            this._lastRecords = records;
+            this.BuildRows(records);
+
+            this.ShowStatus(
+                records.Count > 0
+                    ? $"所选 {totalDays} 天均已入库，直接显示库中数据（共 {records.Count} 条），未发起网络请求"
+                    : $"所选 {totalDays} 天均已入库",
+                InfoBarSeverity.Success);
+        }
+
+        /// <summary>
+        /// 把日期列表压缩成可读文本：连续日期折叠成区间，断开处用顿号分隔。
+        /// 例：2026-09-28、2026-09-29、2026-09-30 → 「2026-09-28 ~ 2026-09-30」。
+        /// 跳过的日期可能很多，全列出来会把提示条撑爆，因此必须折叠。
+        /// </summary>
+        private static string DescribeDates(List<string> dates)
+        {
+            if (dates is null || dates.Count == 0)
+            {
+                return string.Empty;
+            }
+
+            List<DateTime> sorted = dates
+                .Select(d => DateTime.TryParse(d, out DateTime dt) ? dt : (DateTime?)null)
+                .Where(d => d.HasValue)
+                .Select(d => d.Value)
+                .OrderBy(d => d)
+                .ToList();
+
+            if (sorted.Count == 0)
+            {
+                return string.Join("、", dates);
+            }
+
+            List<string> parts = new List<string>();
+            DateTime runStart = sorted[0];
+            DateTime runEnd = sorted[0];
+
+            void Flush()
+            {
+                parts.Add(runStart == runEnd
+                    ? $"{runStart:yyyy-MM-dd}"
+                    : $"{runStart:yyyy-MM-dd} ~ {runEnd:yyyy-MM-dd}");
+            }
+
+            for (int i = 1; i < sorted.Count; i++)
+            {
+                // 相邻一天（含周末）算同一段
+                if ((sorted[i] - runEnd).Days <= 3)
+                {
+                    runEnd = sorted[i];
+                }
+                else
+                {
+                    Flush();
+                    runStart = sorted[i];
+                    runEnd = sorted[i];
+                }
+            }
+
+            Flush();
+            return string.Join("、", parts);
         }
 
         /// <summary>

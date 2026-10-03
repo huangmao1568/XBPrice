@@ -333,6 +333,92 @@ namespace XBPrice
         }
 
         /// <summary>
+        /// 查出指定城市在给定日期区间内**已有数据**的日期集合（yyyy-MM-dd）。
+        ///
+        /// 供抓取前判重使用：只要某天已有任意一条报价记录，就认为该天不必再向
+        /// 目标网站重复请求。判重按「日期粒度」而非「品名 + 规格粒度」，
+        /// 因为报价页是整页数据，重复请求会连带把已抓过的规格再下一遍。
+        ///
+        /// 用 LINQ 翻译成 SELECT DISTINCT QuoteDate ... WHERE，
+        /// 只回传日期文本，不把整批明细拉进内存。
+        /// </summary>
+        /// <param name="city">城市拼音；null 或空表示不限城市。</param>
+        /// <param name="dates">待判定的日期集合（yyyy-MM-dd）。</param>
+        /// <returns>其中**已存在数据**的日期子集（保持入参顺序）。</returns>
+        public List<string> FilterExistingDates(string city, IEnumerable<string> dates)
+        {
+            if (dates is null)
+            {
+                return new List<string>();
+            }
+
+            List<string> candidates = dates
+                .Where(d => !string.IsNullOrWhiteSpace(d))
+                .Select(d => d.Trim())
+                .Distinct()
+                .ToList();
+
+            if (candidates.Count == 0)
+            {
+                return new List<string>();
+            }
+
+            IQueryable<SteelPriceRecord> source = _context.SteelPrices;
+
+            if (!string.IsNullOrWhiteSpace(city))
+            {
+                string c = city.Trim();
+                source = source.Where(r => r.City == c);
+            }
+
+            // 只 SELECT DISTINCT QuoteDate，不把明细拉进内存。
+            // 先用 Contains 把日期范围收窄，再 Distinct 去重，
+            // 整条链都是简单表达式，EF 稳定翻译成 SQL。
+            List<string> existing = source
+                .Where(r => candidates.Contains(r.QuoteDate))
+                .Select(r => r.QuoteDate)
+                .Distinct()
+                .ToList();
+
+            // 按入参顺序返回，便于调用方按日期先后展示跳过详情
+            HashSet<string> hit = new HashSet<string>(existing, StringComparer.Ordinal);
+            return candidates.Where(hit.Contains).ToList();
+        }
+
+        /// <summary>
+        /// 取指定城市与日期的全部报价明细（用于把「已存在、跳过抓取」的日期补进表格）。
+        /// </summary>
+        /// <param name="city">城市拼音。</param>
+        /// <param name="dates">日期集合（yyyy-MM-dd）。</param>
+        public List<SteelPriceRecord> QueryByCityDates(string city, IEnumerable<string> dates)
+        {
+            if (string.IsNullOrWhiteSpace(city) || dates is null)
+            {
+                return new List<SteelPriceRecord>();
+            }
+
+            List<string> list = dates
+                .Where(d => !string.IsNullOrWhiteSpace(d))
+                .Select(d => d.Trim())
+                .Distinct()
+                .ToList();
+
+            if (list.Count == 0)
+            {
+                return new List<SteelPriceRecord>();
+            }
+
+            string c = city.Trim();
+            return _context.SteelPrices
+                .Where(r => r.City == c && list.Contains(r.QuoteDate))
+                .OrderBy(r => r.QuoteDate)
+                .ThenBy(r => r.ProductName)
+                .ThenBy(r => r.Spec)
+                .ThenBy(r => r.Grade)
+                .ToList();
+        }
+
+        /// <summary>
         /// 查询月均价格（数据库页看板数据源）。
         ///
         /// 按 城市 + 年月 + 品名 + 规格 + 牌号 分组，全部用 LINQ 表达，EF 翻译成

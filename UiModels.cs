@@ -33,6 +33,15 @@ namespace XBPrice
         /// <summary>规格条数。</summary>
         public long ItemCount { get; set; }
 
+        /// <summary>月内最低价（原始数值，供导出 CSV 用，不带千分位）。</summary>
+        public double MinPrice { get; set; }
+
+        /// <summary>月均价（原始数值，供导出 CSV 用，不带千分位）。</summary>
+        public double AvgPrice { get; set; }
+
+        /// <summary>月内最高价（原始数值，供导出 CSV 用，不带千分位）。</summary>
+        public double MaxPrice { get; set; }
+
         /// <summary>月均价（千分位文本）。</summary>
         public string AvgPriceText { get; set; }
 
@@ -63,6 +72,9 @@ namespace XBPrice
 
         /// <summary>规格型号，如 φ20（定尺12m）。</summary>
         public string Spec { get; set; }
+
+        /// <summary>价格（原始数值，供导出 CSV 用，不带千分位）。</summary>
+        public double Price { get; set; }
 
         /// <summary>价格（千分位文本）。</summary>
         public string PriceText { get; set; }

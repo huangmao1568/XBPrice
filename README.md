@@ -1,6 +1,6 @@
 # XBPrice —— 钢市报价抓取与查询工具
 
-基于 **WinUI 3 / Windows App SDK** 的桌面应用：按工作日抓取西本新干线（steelx2.com）各城市钢材报价网页，
+基于 **WinUI 3 / Windows App SDK** 的桌面应用：按工作日抓（steelx2.com）各城市钢材报价网页，
 解析入库到本地 SQLite，并提供月均价格看板、涨跌对照与 CSV 导出。
 
 打包形态为**单工程 MSIX**（Microsoft Store 打包应用），可侧载安装，也可直接提交合作伙伴中心上架。
@@ -55,7 +55,7 @@
 
 ```
 xbprice/
-├─ App.xaml / App.xaml.cs          应用入口：亚克力背景、按屏幕自适应窗口、Frame 导航
+├─ App.xaml / App.xaml.cs          应用入口：按屏幕自适应窗口、Frame 导航
 ├─ MainPage.xaml(.cs)              报价查询页：抓取、预览缩放、结果表格、CSV 导出
 ├─ DatabasePage.xaml(.cs)          数据库页：月均汇总 / 原始数据双视图看板
 ├─ Entities.cs                     EF 实体：SteelPriceRecord / ProductCategory / FetchLog

@@ -84,15 +84,6 @@
                         Height="22"
                         Visibility="Collapsed" />
                     <Button
-                        x:Name="exportButton"
-                        Click="ExportButton_Click"
-                        ToolTipService.ToolTip="把当前视图的数据导出为 CSV（可自选文件名与保存位置）">
-                        <StackPanel Orientation="Horizontal" Spacing="{StaticResource AppSpacingS}">
-                            <FontIcon FontSize="14" Glyph="&#xE9D5;" />
-                            <TextBlock Text="导出" />
-                        </StackPanel>
-                    </Button>
-                    <Button
                         x:Name="refreshButton"
                         Click="RefreshButton_Click"
                         Style="{ThemeResource AccentButtonStyle}"

@@ -2,12 +2,10 @@
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Linq;
-using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Controls.Primitives;
 using Microsoft.UI.Xaml.Navigation;
-using Windows.Storage.Pickers;
 
 namespace XBPrice
 {
@@ -217,9 +215,6 @@ namespace XBPrice
                         Grade = row.Grade,
                         DayCount = row.DayCount,
                         ItemCount = row.ItemCount,
-                        MinPrice = row.MinPrice,
-                        AvgPrice = row.AvgPrice,
-                        MaxPrice = row.MaxPrice,
                         AvgPriceText = row.AvgPriceText,
                         RangeText = row.RangeText
                     });
@@ -230,7 +225,6 @@ namespace XBPrice
                 // 左下角总条数：取汇总行覆盖的原始报价条数之和
                 this.UpdateTotalCount(this.Rows.Sum(r => r.ItemCount));
                 this.emptyPanel.Visibility = this.Rows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-                this.UpdateExportButtons();
 
                 if (fallbackNote is not null)
                 {
@@ -274,7 +268,6 @@ namespace XBPrice
                     ProductName = r.ProductName,
                     Grade = r.Grade,
                     Spec = r.Spec,
-                    Price = r.Price,
                     PriceText = r.Price.ToString("N2")
                 });
             }
@@ -292,7 +285,6 @@ namespace XBPrice
             this.rowCountText.Text = $"共 {this.RawRows.Count} 条原始记录";
             this.UpdateTotalCount(records.Count);
             this.rawEmptyPanel.Visibility = this.RawRows.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-            this.UpdateExportButtons();
             this.statusBar.IsOpen = false;
         }
 
@@ -368,113 +360,6 @@ namespace XBPrice
             this.kpiMonths.Text = months.ToString();
             this.kpiCities.Text = cities.ToString();
             this.kpiProducts.Text = productCount.ToString();
-        }
-
-        // ============================================================
-        // 导出 CSV
-        // ============================================================
-
-        /// <summary>
-        /// 刷新导出按钮的可用状态：当前视图必须有数据才允许导出。
-        /// </summary>
-        private void UpdateExportButtons()
-        {
-            this.exportButton.IsEnabled = this._summaryMode
-                ? this.Rows.Count > 0
-                : this.RawRows.Count > 0;
-        }
-
-        /// <summary>
-        /// 导出当前视图的数据为 CSV：
-        /// 月均汇总视图导出聚合结果，原始数据视图导出每一条报价。
-        /// 导出内容始终与屏幕所见一致——按当前视图分派，不给用户导出另一口径数据的机会。
-        /// </summary>
-        private async void ExportButton_Click(object sender, RoutedEventArgs e)
-        {
-            bool summary = this._summaryMode;
-            int count = summary ? this.Rows.Count : this.RawRows.Count;
-
-            if (count == 0)
-            {
-                this.ShowStatus(
-                    summary ? "当前没有可导出的月均数据" : "当前没有可导出的原始报价数据",
-                    InfoBarSeverity.Warning);
-                return;
-            }
-
-            string prefix = summary ? "月均价" : "原始报价";
-
-            // 弹出资源管理器的「另存为」对话框，让用户自选文件名与保存位置
-            Windows.Storage.StorageFile file = await this.PickSaveFileAsync(prefix);
-            if (file is null)
-            {
-                // 用户点了取消
-                return;
-            }
-
-            try
-            {
-                string csv = summary
-                    ? CsvExporter.BuildMonthlyCsv(this.Rows)
-                    : CsvExporter.BuildRawCsv(this.RawRows);
-
-                CsvExporter.WriteTo(file.Path, csv);
-
-                string unit = summary ? "行" : "条";
-                this.ShowStatus($"已导出 {count} {unit}到 {file.Path}", InfoBarSeverity.Success);
-            }
-            catch (Exception ex)
-            {
-                this.ShowStatus("导出失败：" + ex.Message, InfoBarSeverity.Error);
-            }
-        }
-
-        /// <summary>
-        /// 弹出资源管理器的「另存为」对话框，让用户自己决定文件名和保存位置。
-        /// 默认文件名带上当前筛选条件与时间戳（见 <see cref="DescribeFilters"/>），
-        /// 用户仍可在对话框里随意改名或换目录。
-        /// 用户取消时返回 null。
-        /// </summary>
-        private async Task<Windows.Storage.StorageFile> PickSaveFileAsync(string prefix)
-        {
-            FileSavePicker picker = new FileSavePicker
-            {
-                SuggestedStartLocation = PickerLocationId.DocumentsLibrary,
-                SuggestedFileName = CsvExporter.BuildFileName(prefix, this.DescribeFilters())
-            };
-            picker.FileTypeChoices.Add("CSV 文件", new List<string> { ".csv" });
-
-            // 免打包应用必须为拾取器指定窗口句柄 (HWND)，否则调用会失败
-            IntPtr hwnd = WinRT.Interop.WindowNative.GetWindowHandle(App.MainWindow);
-            WinRT.Interop.InitializeWithWindow.Initialize(picker, hwnd);
-
-            return await picker.PickSaveFileAsync();
-        }
-
-        /// <summary>
-        /// 收集当前生效的筛选条件，用于生成可读的导出文件名。
-        /// 未选（全部）的维度不参与，避免文件名被一堆「全部」污染。
-        /// </summary>
-        private List<string> DescribeFilters()
-        {
-            List<string> parts = new List<string>();
-
-            void Add(string boxName, ComboBox box)
-            {
-                string value = this.SelectedValue(box);
-                if (!string.IsNullOrWhiteSpace(value))
-                {
-                    parts.Add(value);
-                }
-            }
-
-            Add("city", this.cityFilter);
-            Add("month", this.monthFilter);
-            Add("product", this.productFilter);
-            Add("grade", this.gradeFilter);
-            Add("spec", this.specFilter);
-
-            return parts;
         }
 
         /// <summary>用 InfoBar 展示状态。</summary>

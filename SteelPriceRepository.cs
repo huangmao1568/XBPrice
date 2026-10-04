@@ -213,13 +213,22 @@ namespace XBPrice
             }
             if (!string.IsNullOrWhiteSpace(from))
             {
+                // QuoteDate 固定为 yyyy-MM-dd 等长格式，字典序即日期序。
+                //
+                // 注意：C# 语言层面 string 不支持 >= / <= 运算符（那是 Java/Python 的写法），
+                // 必须用 CompareTo 而非 string.Compare：
+                //   string.Compare(a, b, StringComparison.Ordinal) 是 .NET 静态方法，
+                //   EF 无法翻译，查询编译期直接抛
+                //   「Translation of method 'string.Compare' failed」；
+                //   string.CompareOrdinal(a, b) 同理，也翻译不了。
+                //   string.CompareTo 是实例方法，EF 能翻译成 SQL 的 CASE 表达式。
                 string f = from.Trim();
-                query = query.Where(r => string.Compare(r.QuoteDate, f, StringComparison.Ordinal) >= 0);
+                query = query.Where(r => r.QuoteDate.CompareTo(f) >= 0);
             }
             if (!string.IsNullOrWhiteSpace(to))
             {
                 string t = to.Trim();
-                query = query.Where(r => string.Compare(r.QuoteDate, t, StringComparison.Ordinal) <= 0);
+                query = query.Where(r => r.QuoteDate.CompareTo(t) <= 0);
             }
 
             return query
@@ -247,13 +256,16 @@ namespace XBPrice
             }
             if (!string.IsNullOrWhiteSpace(from))
             {
+                // 同 Query：用实例方法 CompareTo，让 EF 翻译成 SQL 的比较表达式；
+                // 不能用 string.Compare（静态方法，EF 翻译不了），
+                // 也不能用 >= / <=（C# 的 string 不支持这两个运算符）。
                 string f = from.Trim();
-                query = query.Where(r => string.Compare(r.QuoteDate, f, StringComparison.Ordinal) >= 0);
+                query = query.Where(r => r.QuoteDate.CompareTo(f) >= 0);
             }
             if (!string.IsNullOrWhiteSpace(to))
             {
                 string t = to.Trim();
-                query = query.Where(r => string.Compare(r.QuoteDate, t, StringComparison.Ordinal) <= 0);
+                query = query.Where(r => r.QuoteDate.CompareTo(t) <= 0);
             }
 
             return query

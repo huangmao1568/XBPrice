@@ -70,6 +70,28 @@ namespace XBPrice
     }
 
     /// <summary>
+    /// 页面解析结果的分类。
+    ///
+    /// 为什么要区分：报价站在法定假期（调休上班但不出报价）仍会返回页面，
+    /// 只是报价表里只有表头没有数据行。这种情况属于**正常现象**，
+    /// 不该和「网页结构改了导致解析失效」一样弹错误告警。
+    /// </summary>
+    public enum PageParseStatus
+    {
+        /// <summary>解析出了至少一条报价记录。</summary>
+        HasData = 0,
+
+        /// <summary>页面正常返回、能定位到报价表与表头，但表内无数据行——通常是假期无报价。</summary>
+        NoQuoteTableData = 1,
+
+        /// <summary>页面里连含「品名」的报价表都找不到——网页结构可能已调整，需要人介入。</summary>
+        TableNotFound = 2,
+
+        /// <summary>页面内容为空。</summary>
+        EmptyPage = 3,
+    }
+
+    /// <summary>
     /// 一次抓取任务的汇总结果。
     ///
     /// 设计意图：旧实现直接把全部任务交给 <c>Task.WhenAll</c> 聚合，任何一天失败都会让整批抛异常，
@@ -84,14 +106,37 @@ namespace XBPrice
         /// <summary>抓取失败的日期（yyyy-MM-dd）。为空表示全部成功。</summary>
         public List<string> FailedDates { get; } = new List<string>();
 
-        /// <summary>本次任务涉及的工作日总数。</summary>
+        /// <summary>
+        /// 页面正常但无报价的日期（yyyy-MM-dd），通常是法定假期。
+        /// 这类日期不视为失败，直接忽略即可，因此不计入 <see cref="FailedDates"/>。
+        /// </summary>
+        public List<string> NoDataDates { get; } = new List<string>();
+
+        /// <summary>
+        /// 疑似网页结构变化（连报价表都找不到）的日期（yyyy-MM-dd）。
+        /// 这类情况需要人介入，因此按失败处理并提示。
+        /// </summary>
+        public List<string> SuspectDates { get; } = new List<string>();
+
+        /// <summary>
+        /// 本次任务涉及的工作日总数。
+        /// </summary>
         public int TotalDays { get; set; }
 
-        /// <summary>成功抓取的天数。</summary>
-        public int SucceededDays => this.TotalDays - this.FailedDates.Count;
+        /// <summary>
+        /// 实际取到报价的天数——不含失败、结构异常与假期无报价的日子。
+        /// 用于界面提示「N 天抓取成功」，所以必须把三类排除的日子都算掉。
+        /// </summary>
+        public int SucceededDays => this.TotalDays
+                                   - this.FailedDates.Count
+                                   - this.SuspectDates.Count
+                                   - this.NoDataDates.Count;
 
-        /// <summary>是否全部成功。</summary>
-        public bool IsAllSucceeded => this.FailedDates.Count == 0;
+        /// <summary>
+        /// 是否全部正常——含「下载成功但页面无数据」的假期日在内，都算正常。
+        /// 只有真正的下载失败与结构异常才算不正常。
+        /// </summary>
+        public bool IsAllSucceeded => this.FailedDates.Count == 0 && this.SuspectDates.Count == 0;
     }
 
     /// <summary>
@@ -222,33 +267,76 @@ namespace XBPrice
 
             using (SemaphoreSlim gate = new SemaphoreSlim(MaxConcurrency))
             {
-                Task<(List<SteelPriceRecord> Rows, MyWebsite Failed)>[] tasks =
-                    new Task<(List<SteelPriceRecord> Rows, MyWebsite Failed)>[websites.Count];
+                Task<DayFetchResult>[] tasks = new Task<DayFetchResult>[websites.Count];
 
                 for (int i = 0; i < websites.Count; i++)
                 {
-                    tasks[i] = FetchRecordsAsync(gate, websites[i]);
+                    tasks[i] = FetchDayAsync(gate, websites[i]);
                 }
 
-                (List<SteelPriceRecord> Rows, MyWebsite Failed)[] groups =
-                    await Task.WhenAll(tasks).ConfigureAwait(false);
+                DayFetchResult[] groups = await Task.WhenAll(tasks).ConfigureAwait(false);
 
-                foreach ((List<SteelPriceRecord> Rows, MyWebsite Failed) group in groups)
+                foreach (DayFetchResult day in groups)
                 {
-                    if (group.Failed is null)
+                    string dateText = day.Website.Date.ToString("yyyy-MM-dd");
+
+                    switch (day.Status)
                     {
-                        outcome.Records.AddRange(group.Rows);
-                    }
-                    else
-                    {
-                        outcome.FailedDates.Add(group.Failed.Date.ToString("yyyy-MM-dd"));
+                        case DayFetchStatus.Ok:
+                            outcome.Records.AddRange(day.Rows);
+                            break;
+
+                        // 页面正常返回但表内无数据：法定假期无报价，属正常现象，静默忽略
+                        case DayFetchStatus.NoQuoteData:
+                            outcome.NoDataDates.Add(dateText);
+                            break;
+
+                        // 连报价表都定位不到：网页结构可能变了，需要人介入
+                        case DayFetchStatus.ParseSuspect:
+                            outcome.SuspectDates.Add(dateText);
+                            break;
+
+                        case DayFetchStatus.Failed:
+                            outcome.FailedDates.Add(dateText);
+                            break;
                     }
                 }
             }
 
             // 失败日期按时间先后排序，便于界面提示与补抓
             outcome.FailedDates.Sort(StringComparer.Ordinal);
+            outcome.SuspectDates.Sort(StringComparer.Ordinal);
+            outcome.NoDataDates.Sort(StringComparer.Ordinal);
             return outcome;
+        }
+
+        /// <summary>单日抓取的结果分类。</summary>
+        private enum DayFetchStatus
+        {
+            /// <summary>抓取成功且有报价数据。</summary>
+            Ok = 0,
+
+            /// <summary>页面正常但无报价（假期），静默忽略。</summary>
+            NoQuoteData = 1,
+
+            /// <summary>页面结构异常（找不到报价表），需要告警。</summary>
+            ParseSuspect = 2,
+
+            /// <summary>下载失败（网络 / 站点不可用）。</summary>
+            Failed = 3,
+        }
+
+        /// <summary>单日抓取的原始结果。</summary>
+        private sealed class DayFetchResult
+        {
+            /// <summary>该日对应的网址，提供日期与城市信息。</summary>
+            public MyWebsite Website { get; set; }
+
+            /// <summary>结果分类。</summary>
+            public DayFetchStatus Status { get; set; }
+
+            /// <summary>解析出的记录（仅 Ok 时非空）。</summary>
+            public List<SteelPriceRecord> Rows { get; set; } = new List<SteelPriceRecord>();
         }
 
         /// <summary>
@@ -262,17 +350,19 @@ namespace XBPrice
         }
 
         /// <summary>
-        /// 抓取单个工作日。失败不抛出，而是把该网址回传给调用方记录，
+        /// 抓取单个工作日。不抛出异常，而是把结果分类回传给调用方，
         /// 这样单天异常不会拖垮整批抓取。
+        ///
+        /// 分类的意义在于把「假期无报价」与「真的出问题了」分开：
+        /// 前者静默忽略，后者才需要提示用户。
         /// </summary>
-        private static async Task<(List<SteelPriceRecord> Rows, MyWebsite Failed)> FetchRecordsAsync(
-            SemaphoreSlim gate, MyWebsite website)
+        private static async Task<DayFetchResult> FetchDayAsync(SemaphoreSlim gate, MyWebsite website)
         {
             await gate.WaitAsync().ConfigureAwait(false);
             try
             {
                 string html = await DownloadStringAsync(new Uri(website.Url)).ConfigureAwait(false);
-                List<SteelPriceRecord> rows = ParsePriceTable(html);
+                List<SteelPriceRecord> rows = ParsePriceTable(html, out PageParseStatus status);
 
                 // 补上城市与日期：这两个字段来自请求上下文，不在网页表格里
                 string dateText = website.Date.ToString("yyyy-MM-dd");
@@ -282,12 +372,33 @@ namespace XBPrice
                     row.QuoteDate = dateText;
                 }
 
-                return (rows, null);
+                DayFetchStatus result = status switch
+                {
+                    PageParseStatus.HasData => DayFetchStatus.Ok,
+
+                    // 页面结构正常、只是没有报价（法定假期）：静默忽略
+                    PageParseStatus.NoQuoteTableData => DayFetchStatus.NoQuoteData,
+
+                    // 找不到报价表 / 页面为空：视为结构异常，需要告警
+                    _ => DayFetchStatus.ParseSuspect,
+                };
+
+                return new DayFetchResult
+                {
+                    Website = website,
+                    Status = result,
+                    Rows = rows
+                };
             }
             catch (Exception)
             {
                 // 下载入口已做重试，到这里说明确实拿不到，按失败日记录
-                return (new List<SteelPriceRecord>(), website);
+                return new DayFetchResult
+                {
+                    Website = website,
+                    Status = DayFetchStatus.Failed,
+                    Rows = new List<SteelPriceRecord>()
+                };
             }
             finally
             {
@@ -355,9 +466,26 @@ namespace XBPrice
         /// </summary>
         public static List<SteelPriceRecord> ParsePriceTable(string html)
         {
+            return ParsePriceTable(html, out _);
+        }
+
+        /// <summary>
+        /// 解析报价表，同时回报页面状态（用于区分「假期无报价」与「网页结构变了」）。
+        ///
+        /// 两种空结果的性质完全不同，绝不能混为一谈：
+        /// 法定假期（调休上班但不出报价）时页面照常返回，表头也在，只是没有数据行——
+        /// 这属于正常现象，静默忽略即可；
+        /// 而连含「品名」的表都定位不到，说明网站改版了，必须提示人去处理。
+        /// </summary>
+        /// <param name="html">页面 HTML。</param>
+        /// <param name="status">回报页面状态。</param>
+        public static List<SteelPriceRecord> ParsePriceTable(string html, out PageParseStatus status)
+        {
             List<SteelPriceRecord> rows = new List<SteelPriceRecord>();
+
             if (string.IsNullOrEmpty(html))
             {
+                status = PageParseStatus.EmptyPage;
                 return rows;
             }
 
@@ -382,6 +510,8 @@ namespace XBPrice
 
             if (table is null)
             {
+                // 表都找不到：网页结构可能变了，交给上层告警
+                status = PageParseStatus.TableNotFound;
                 return rows;
             }
 
@@ -433,6 +563,11 @@ namespace XBPrice
                     Price = price
                 });
             }
+
+            // 表找到了但一行数据都没解析出来 → 假期无报价（页面结构本身是好的）
+            status = rows.Count > 0
+                ? PageParseStatus.HasData
+                : PageParseStatus.NoQuoteTableData;
 
             return rows;
         }

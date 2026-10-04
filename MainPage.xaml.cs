@@ -40,6 +40,13 @@ namespace XBPrice
         /// <summary>最近一次查询结果对应的 CSV 文本。</summary>
         private string _csv;
 
+        /// <summary>
+        /// 空状态的文案是否该用「库里没数据」那套说法。
+        /// 由「全部日期都已入库、走查库路径展示」时置true，
+        /// 真正发起过网络抓取后置false，避免把抓取失败误说成库里没有。
+        /// </summary>
+        private bool _emptyHintFromLibrary;
+
         /// <summary>当前缩放比例。</summary>
         private double _zoom = 1.0;
 
@@ -370,11 +377,15 @@ namespace XBPrice
                 // 全部日期都已入库，无需任何网络请求
                 if (toFetch.Count == 0)
                 {
+                    this._emptyHintFromLibrary = true;
                     this.LoadExistingIntoView(city, existingDates, websites.Count);
                     this._repository.WriteFetchLog(
                         startText, endText, city, 0, 0, 0, "跳过", $"所选 {websites.Count} 天均已入库");
                     return;
                 }
+
+                // 走了真实抓取路径：无论结果如何都不该再说「库里没有」
+                this._emptyHintFromLibrary = false;
 
                 // 按行解析整张报价表，并发抓取所选日期范围内的全部工作日。
                 // 抓取与解析逻辑见 SteelPriceFetcher，入库见 SteelPriceRepository。
@@ -383,47 +394,115 @@ namespace XBPrice
                 List<SteelPriceRecord> records = outcome.Records;
                 this._lastRecords = records;
 
-                // 一天都没抓到：要么断网 / 站点不可用，要么网页结构变了导致解析为空。
-                // 两种情况都记失败日志后直接返回，避免把空批次当成功写进日志。
-                if (records.Count == 0)
-                {
-                    string reason = outcome.IsAllSucceeded
-                        ? $"页面已下载但未解析到数据，网页结构可能已调整（共 {outcome.TotalDays} 天）"
-                        : $"全部 {outcome.TotalDays} 天抓取失败：{string.Join("、", outcome.FailedDates)}";
+// 先把「已入库跳过的日期」从库里补进来，再判断是否空。
+    //
+    // 顺序很关键：早前把判空放在合并之前，导致「本次网络抓的全是节假日、
+    // 但库里已有其他日期数据」时直接 return，库里的数据永远显示不出来——
+    // 表格空着，提示却说「N 天无报价」，用户完全看不到已有数据。
+    // 先合并再看是否为空，任何情况下表格都能覆盖所选区间的全部工作日。
+    if (existingDates.Count > 0)
+    {
+        records = records
+            .Concat(this._repository.QueryByCityDates(city, existingDates))
+            .OrderBy(r => r.QuoteDate, StringComparer.Ordinal)
+            .ToList();
+        this._lastRecords = records;
+    }
 
-                    this._repository.WriteFetchLog(
-                        startText, endText, city, 0, 0, 0, "失败", reason);
+    int fetchedCount = outcome.Records.Count;
+    int fromLibrary = records.Count - fetchedCount;
 
-                    this.ShowStatus(reason, InfoBarSeverity.Error);
-                    return;
-                }
+    // 一天都没抓到。这里要区分三种截然不同的情况，不能一律当成错误：
+    // 1) 全部是「假期无报价」日 → 页面结构正常、只是没数据，完全不该报警。
+    // 2) 下载失败（断网 / 站点不可用）→ 真正的失败，需要提示。
+    // 3) 疑似网页结构变化（连报价表都找不到）→ 需要人介入，必须提示。
+    if (records.Count == 0)
+    {
+        bool allNoQuote = outcome.FailedDates.Count == 0 && outcome.SuspectDates.Count == 0;
 
-                // 写入数据库（幂等：重复抓取同一天只刷新价格）
-                SaveResult saveResult = this._repository.Save(records);
+        if (allNoQuote)
+        {
+            // 全部是假期无报价：这不是故障，但**必须给一句话**。
+            // 之前这里直接静默 return，导致用户点了按钮完全没反应、
+            // 不知道是程序卡了还是本来就没数据——静默不等于无感。
+            this._repository.WriteFetchLog(
+                startText, endText, city, 0, 0, 0, "跳过",
+                $"{outcome.NoDataDates.Count} 天无报价（假期）：{string.Join("、", outcome.NoDataDates)}");
 
-                // 跳过的日期从库里补出来，与本次抓到的合并，
-                // 保证屏幕表格覆盖所选区间的全部工作日，不会因判重而少几天。
-                if (existingDates.Count > 0)
-                {
-                    records = records
-                        .Concat(this._repository.QueryByCityDates(city, existingDates))
-                        .OrderBy(r => r.QuoteDate, StringComparer.Ordinal)
-                        .ToList();
-                    this._lastRecords = records;
-                }
+            // 屏幕提示保持一句话，具体日期留到日志里
+            this.ShowStatus(
+                $"所选 {outcome.TotalDays} 天均无报价，多为节假日站点不出报价，可换一段日期",
+                InfoBarSeverity.Success);
+            return;
+        }
+
+        // 这里能走到，说明确有失败或结构异常。
+        // 若库里有数据可补，先把数据显示出来，别让用户只看到一条错误提示。
+        if (fromLibrary > 0)
+        {
+            this.BuildRows(records);
+        }
+
+        List<string> problems = new List<string>();
+        if (outcome.SuspectDates.Count > 0)
+        {
+            problems.Add($"页面已下载但未找到报价表，网页结构可能已调整（{DescribeDates(outcome.SuspectDates)}）");
+        }
+
+        if (outcome.FailedDates.Count > 0)
+        {
+            problems.Add($"抓取失败 {outcome.FailedDates.Count} 天：{string.Join("、", outcome.FailedDates)}");
+        }
+
+        string reason = string.Join("；", problems);
+
+        this._repository.WriteFetchLog(
+            startText, endText, city, 0, 0, 0, "失败", reason);
+
+        this.ShowStatus(reason, InfoBarSeverity.Error);
+        return;
+    }
+
+    // 写入数据库（幂等：重复抓取同一天只刷新价格）
+    SaveResult saveResult = this._repository.Save(outcome.Records);
 
                 string status = outcome.IsAllSucceeded ? "成功" : "部分失败";
                 List<string> notes = new List<string>();
 
+                // 详细构成写进日志，供日后排查用
+                notes.Add($"网络获取 {fetchedCount} 条");
+
+                if (fromLibrary > 0)
+                {
+                    notes.Add($"数据库补充 {fromLibrary} 条");
+                }
+
                 if (existingDates.Count > 0)
                 {
-                    notes.Add($"跳过已入库 {existingDates.Count} 天（{DescribeDates(existingDates)}）");
+                    notes.Add($"{existingDates.Count} 天已入库跳过抓取（{DescribeDates(existingDates)}）");
+                }
+
+                // 假期无报价的日子也要记录，否则日后看不出「明明选了这些天却少了几天」
+                if (outcome.NoDataDates.Count > 0)
+                {
+                    notes.Add($"{outcome.NoDataDates.Count} 天无报价已忽略"
+                              + $"（{DescribeDates(outcome.NoDataDates)}，多为节假日）");
                 }
 
                 if (!outcome.IsAllSucceeded)
                 {
-                    notes.Add($"{outcome.SucceededDays}/{outcome.TotalDays} 天抓取成功，失败："
-                              + string.Join("、", outcome.FailedDates));
+                    notes.Add($"{outcome.SucceededDays}/{outcome.TotalDays} 天取到数据");
+
+                    // 下载失败与结构异常要分开讲：前者补抓即可，后者得人去查网站改版
+                    if (outcome.FailedDates.Count > 0)
+                    {
+                        notes.Add($"下载失败：{string.Join("、", outcome.FailedDates)}");
+                    }
+
+                    if (outcome.SuspectDates.Count > 0)
+                    {
+                        notes.Add($"网页结构可能已调整：{DescribeDates(outcome.SuspectDates)}");
+                    }
                 }
 
                 this._repository.WriteFetchLog(
@@ -438,23 +517,61 @@ namespace XBPrice
 
                 this.BuildRows(records);
 
-                string summary =
-                    $"已获取 {records.Count} 条记录，入库新增 {saveResult.Inserted} 条、更新 {saveResult.Updated} 条";
+// 屏幕提示以「数据来源」开头——用户最关心的是数据哪来的、有多少条，
+    // 而节假日/已入库这类过程信息不该抢主位。
+    string summary = $"共 {records.Count} 条";
 
-                if (notes.Count == 0)
-                {
-                    this.ShowStatus(summary, InfoBarSeverity.Success);
-                }
-                else if (outcome.IsAllSucceeded)
-                {
-                    // 有跳过但全部抓取成功：用提示级而非警告级，避免用户误以为出错
-                    this.ShowStatus($"{summary}；{string.Join("；", notes)}", InfoBarSeverity.Success);
-                }
-                else
-                {
-                    this.ShowStatus($"{summary}；{string.Join("；", notes)}", InfoBarSeverity.Warning);
-                }
-            }
+    if (fromLibrary > 0)
+    {
+        summary += $"（数据库 {fromLibrary} 条 + 网络 {fetchedCount} 条）";
+    }
+
+    if (saveResult.Inserted > 0 || saveResult.Updated > 0)
+    {
+        summary += $"，入库新增 {saveResult.Inserted} 条、更新 {saveResult.Updated} 条";
+    }
+
+    // 过程信息只给一句概括，不带日期区间（详见 FetchLog）
+    List<string> brief = new List<string>();
+
+    if (fromLibrary > 0)
+    {
+        brief.Add($"{existingDates.Count} 天已入库跳过抓取");
+    }
+
+    if (outcome.NoDataDates.Count > 0)
+    {
+        brief.Add($"{outcome.NoDataDates.Count} 天节假日无报价");
+    }
+
+    if (brief.Count > 0)
+    {
+        summary += "；" + string.Join("，", brief);
+    }
+
+    // 真正失败时才追加天数与原因，且用警告级
+    if (!outcome.IsAllSucceeded)
+    {
+        summary += $"；{outcome.SucceededDays}/{outcome.TotalDays} 天成功";
+
+        if (outcome.FailedDates.Count > 0)
+        {
+            summary += "，部分抓取失败";
+        }
+
+        if (outcome.SuspectDates.Count > 0)
+        {
+            summary += "，疑似网页结构变化";
+        }
+
+        this.ShowStatus(summary, InfoBarSeverity.Warning);
+    }
+    else
+    {
+        // 全部正常（含节假日与已入库跳过）用成功级，避免用户误以为出错
+        this.ShowStatus(summary, InfoBarSeverity.Success);
+    }
+}
             catch (Exception ex)
             {
                 this.ShowStatus(ex.Message, InfoBarSeverity.Error);
@@ -483,11 +600,15 @@ namespace XBPrice
             this._lastRecords = records;
             this.BuildRows(records);
 
-            this.ShowStatus(
-                records.Count > 0
-                    ? $"所选 {totalDays} 天均已入库，直接显示库中数据（共 {records.Count} 条），未发起网络请求"
-                    : $"所选 {totalDays} 天均已入库",
-                InfoBarSeverity.Success);
+            // 理论上查不到任何行：FilterExistingDates 与 QueryByCityDates 的筛选口径
+            // 完全一致（都是 City + QuoteDate IN 列表），所以「判定为已入库却查不到明细」
+            // 正常不会发生。真发生只能是城市名不一致之类的问题，
+            // 因此作为兜底分支明确说清原因，而不是含糊地说「已入库」。
+            string message = records.Count > 0
+                ? $"所选 {totalDays} 天已全部入库，直接显示库中数据（共 {records.Count} 条），本次未发起网络请求"
+                : $"所选 {totalDays} 天已入库，但没能读出对应的报价明细，请检查城市拼音是否与抓取时一致";
+
+            this.ShowStatus(message, InfoBarSeverity.Success);
         }
 
         /// <summary>
@@ -743,9 +864,37 @@ namespace XBPrice
             this.exportButton.IsEnabled = !busy && this.Model.Count > 0;
         }
 
+        /// <summary>
+        /// 刷新空状态提示。
+        ///
+        /// 文案要贴合实际情况：同样「表格没有行」，可能是压根还没抓过数据，
+        /// 也可能是所选日期在库里根本没有报价（比如整段都是假期）。
+        /// 后一种情况若还提示「点上方获取数据开始抓取」会误导用户——
+        /// 数据已经在库里了，再点一次也抓不出来。
+        /// </summary>
         private void UpdateEmptyHint()
         {
-            this.emptyPanel.Visibility = this.Model.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+            bool empty = this.Model.Count == 0;
+            this.emptyPanel.Visibility = empty ? Visibility.Visible : Visibility.Collapsed;
+
+            if (!empty)
+            {
+                return;
+            }
+
+            if (this._emptyHintFromLibrary)
+            {
+                // 走查库路径却查不到行：说明这些日期在库里没有报价明细，
+                // 多为节假日无报价，再点「获取数据」也抓不出来，得换日期或去数据库页看
+                this.emptyTitleText.Text = "所选日期暂无报价";
+                this.emptyHintText.Text =
+                    "这些日期在数据库里没有报价记录（多为节假日无报价）。可换一段日期，或点「数据库」查看已入库数据";
+            }
+            else
+            {
+                this.emptyTitleText.Text = "暂无数据";
+                this.emptyHintText.Text = "点上方「获取数据」开始抓取所选日期范围的报价";
+            }
         }
 
         /// <summary>用 InfoBar 展示状态，替代会阻塞界面的弹窗。</summary>

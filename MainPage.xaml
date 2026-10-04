@@ -380,8 +380,14 @@
                             VerticalAlignment="Center"
                             Spacing="{ThemeResource AppSpacingS}">
                             <FontIcon Style="{ThemeResource AppEmptyStateIconStyle}" Glyph="&#xE7C3;" />
-                            <TextBlock Style="{ThemeResource AppEmptyStateTextStyle}" Text="暂无数据" />
-                            <TextBlock Style="{ThemeResource AppEmptyStateHintStyle}" Text="点上方「获取数据」开始抓取所选日期范围的报价" />
+                            <TextBlock
+                                Style="{ThemeResource AppEmptyStateTextStyle}"
+                                x:Name="emptyTitleText"
+                                Text="暂无数据" />
+                            <TextBlock
+                                Style="{ThemeResource AppEmptyStateHintStyle}"
+                                x:Name="emptyHintText"
+                                Text="点上方「获取数据」开始抓取所选日期范围的报价" />
                         </StackPanel>
                     </Grid>
                 </Grid>

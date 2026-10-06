@@ -19,8 +19,10 @@
     产物（AppPackages\ 下）：
       XBPrice_<版本>_x64.msixupload   ← 直接上传到合作伙伴中心
       XBPrice_<版本>_x64_Test\        ← 侧载安装包 + Add-AppDevPackage.ps1
-    想同时支持 ARM64：把 /p:Platform=x64 换成 /p:Platform=ARM64 再执行一次，
-    两个 .msixupload 可在同一次提交里一起上传。
+
+    仅支持 x64 单架构（见 Platforms）。若日后要支持 ARM64，需同时改三处：
+    Platforms / RuntimeIdentifiers 加回 ARM64、新建 win-ARM64.pubxml，
+    并把下方 PublishProfile 改回 win-$(Platform).pubxml 的动态拼接。
 
     若改用 dotnet build 打包（找不到 mspdbcmf.exe），需加 -p:AppxSymbolPackageEnabled=false，
     否则符号包步骤会报 MSB6011。
@@ -39,8 +41,13 @@
     <ApplicationManifest>app.manifest</ApplicationManifest>
     <ApplicationIcon>Assets\price.ico</ApplicationIcon>
 
-    <Platforms>x86;x64;ARM64</Platforms>
-    <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
+    <!--
+      只支持 x64 单架构。
+      商店提交只需上传一个 .msixupload，省去另打 x86 / ARM64 的麻烦；
+      自带 .NET 运行时（见下方 win-x64.pubxml），用户无需另装 .NET。
+    -->
+    <Platforms>x64</Platforms>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
 
     <!-- WinUI 3 开关 -->
     <UseWinUI>true</UseWinUI>
@@ -79,12 +86,19 @@
   </PropertyGroup>
 
   <!--
-    打包 / 发布时使用的配置文件（必须放在上面的 Platform 兜底之后，否则会拼出 win-AnyCPU.pubxml）。
-    win-*.pubxml 中设置了 SelfContained=true，即安装包里自带 .NET 运行时，
+    发布配置：只支持 x64，故固定文件名，不再用 win-$(Platform).pubxml 动态拼接。
+    win-x64.pubxml 中设置 SelfContained=true，即安装包里自带 .NET 运行时，
     用户无需另外安装 .NET，符合商店“装好即可用”的要求。
+
+    注意：普通 `dotnet build` 不执行发布流程，硬设 PublishProfile 只会报
+    NETSDK1198（找不到发布配置文件）——实测即使写绝对路径也照样报，
+    属 dotnet CLI 打包路径下的已知噪音。
+    因此这里只在「打包 / 发布」目标真正启用时才设置：
+      * VS 里「创建应用程序包」→ MSBuild 会自动带上该属性，配置正常生效；
+      * 仅做本地编译调试时不设置，警告消失。
   -->
-  <PropertyGroup>
-    <PublishProfile>win-$(Platform).pubxml</PublishProfile>
+  <PropertyGroup Condition="'$(GenerateAppxPackageOnBuild)' == 'true'">
+    <PublishProfile>$(MSBuildProjectDirectory)\win-x64.pubxml</PublishProfile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -171,6 +185,8 @@
     <AppxPackageSigningTimestampDigestAlgorithm>SHA256</AppxPackageSigningTimestampDigestAlgorithm>
     <AppxAutoIncrementPackageRevision>True</AppxAutoIncrementPackageRevision>
     <GenerateTestArtifacts>True</GenerateTestArtifacts>
+    <GenerateTemporaryStoreCertificate>True</GenerateTemporaryStoreCertificate>
+    <HoursBetweenUpdateChecks>0</HoursBetweenUpdateChecks>
   </PropertyGroup>
 
 </Project>

@@ -7,6 +7,7 @@ using System.Threading.Tasks;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
+using Microsoft.UI.Xaml.Navigation;
 using Microsoft.Web.WebView2.Core;
 using Windows.Storage;
 using Windows.Storage.Pickers;
@@ -52,6 +53,15 @@ namespace XBPrice
 
         /// <summary>页面是否已首次加载完成（首次完成后才自动做整页适配）。</summary>
         private bool _firstNavigationDone;
+
+        /// <summary>
+        /// 页面当前是否挂在视觉树上。
+        ///
+        /// WebView2 是原生控件，一旦页面被移出视觉树（切到数据库页再返回时
+        /// 会短暂发生），再调用 CoreWebView2 的方法就可能撞上已释放的原生对象，
+        /// 直接触发 0xc0000005 访问冲突。所有 WebView2 操作前都必须先看这个标志。
+        /// </summary>
+        private bool _isLoaded;
 
         /// <summary>数据仓储。整个页面共用一个实例，避免反复建库。</summary>
         private readonly SteelPriceRepository _repository = new SteelPriceRepository();
@@ -149,6 +159,13 @@ namespace XBPrice
         {
             this.InitializeComponent();
 
+            // 关键：必须启用页面缓存。
+            // 默认情况下 Frame 导航离开会销毁 MainPage，WebView2 随之被释放；
+            // 返回时又新建一个页面，但旧的 NavigationCompleted 回调与
+            // Task.Delay 续体仍在运行，访问已释放的原生对象即 0xc0000005。
+            // 缓存后 MainPage 只构造一次，WebView2 全程存活，问题从根上消失。
+            this.NavigationCacheMode = NavigationCacheMode.Required;
+
             // 给日期一个默认区间：否则 DatePicker 未选择时会返回 DateTimeOffset.MinValue，
             // 拼出 00010101 的非法网址导致服务端报错
             DateTimeOffset today = DateTimeOffset.Now;
@@ -159,10 +176,42 @@ namespace XBPrice
             int cityIndex = DefaultCityIndex >= 0 && DefaultCityIndex < _cities.Count ? DefaultCityIndex : 0;
             this.cityPicker.SelectedIndex = cityIndex;
 
-            this.webview.Source = new Uri(new MyWebsite(_cities[cityIndex], today).Url);
+            this.Loaded += MainPage_Loaded;
+            this.Unloaded += MainPage_Unloaded;
 
             this.webview.NavigationCompleted += this.WebView_NavigationCompleted;
         }
+
+        /// <summary>
+        /// 页面挂上视觉树时才设置网页地址。
+        ///
+        /// 不能放在构造函数里：那时 WebView2 还没进视觉树，
+        /// CoreWebView2 未初始化完成，Source 可能被丢弃或引发原生异常。
+        /// </summary>
+        private void MainPage_Loaded(object sender, RoutedEventArgs e)
+        {
+            this._isLoaded = true;
+
+            // 已经设过地址就不再重复导航，避免从数据库页返回时网页白白重新加载一遍
+            if (this._pendingUrl is null)
+            {
+                DateTimeOffset today = DateTimeOffset.Now;
+                string url = new MyWebsite(_cities[DefaultCityIndex], today).Url;
+                this._pendingUrl = url;
+                this.webview.Source = new Uri(url);
+            }
+        }
+
+        /// <summary>
+        /// 页面离开视觉树：标记卸载状态，让后续的 WebView2 回调自行短路。
+        /// </summary>
+        private void MainPage_Unloaded(object sender, RoutedEventArgs e)
+        {
+            this._isLoaded = false;
+        }
+
+        /// <summary>最近一次设置的网页地址，用于判断是否需要重新导航。</summary>
+        private string _pendingUrl;
 
         /// <summary>可选城市列表（供 ComboBox 绑定）。</summary>
         public IReadOnlyList<string> Cities => _cities;
@@ -180,6 +229,13 @@ namespace XBPrice
         /// </summary>
         private async void WebView_NavigationCompleted(WebView2 sender, CoreWebView2NavigationCompletedEventArgs args)
         {
+            // 页面已离开视觉树时不碰 WebView2：此时原生对象可能已释放，
+            // 继续访问就是 0xc0000005，而不是可捕获的托管异常。
+            if (!_isLoaded)
+            {
+                return;
+            }
+
             if (!args.IsSuccess)
             {
                 return;
@@ -210,16 +266,25 @@ namespace XBPrice
             await this.ApplyFitAsync();
         }
 
-        /// <summary>缩放按钮的统一入口（按钮事件无法直接 await，这里 fire-and-forget）。</summary>
-        private async void SetZoomAsync(double value)
+        /// <summary>
+        /// 缩放按钮的统一入口。
+        ///
+        /// 用 ContinueWith 而非 async void：async void 里未捕获的异常会直接终止进程，
+        /// 而缩放失败顶多是没缩放成功，不值得让整个程序崩掉。
+        /// </summary>
+        private void SetZoomAsync(double value)
         {
-            await this.SetZoomInternalAsync(value);
+            _ = this.SetZoomInternalAsync(value).ContinueWith(
+                t => { _ = t.Exception; },
+                TaskScheduler.Default);
         }
 
         /// <summary>把缩放比例应用到网页内容上。</summary>
         private async Task ApplyZoomToPageAsync(double zoom)
         {
-            if (this.webview.CoreWebView2 is null)
+            // 三重防护：页面必须在树上、CoreWebView2 必须已初始化、调用期间不能被卸载。
+            // 缺任何一个都可能在原生层崩掉。
+            if (!_isLoaded || this.webview.CoreWebView2 is null)
             {
                 return;
             }
@@ -236,13 +301,23 @@ namespace XBPrice
     body.style.width = (100 / z) + '%';
 }})();";
 
-            await this.webview.CoreWebView2.ExecuteScriptAsync(script);
+            CoreWebView2 core = this.webview.CoreWebView2;
+            if (core is null)
+            {
+                return;
+            }
+
+            await core.ExecuteScriptAsync(script);
         }
 
         /// <summary>刷新缩放百分比文本。</summary>
         private void UpdateZoomText()
         {
-            this.zoomText.Text = $"{Math.Round(this._zoom * 100)}%";
+            // 页面卸载后不要再改控件，否则可能碰到已释放的原生对象
+            if (_isLoaded)
+            {
+                this.zoomText.Text = $"{Math.Round(this._zoom * 100)}%";
+            }
         }
 
         /// <summary>
@@ -254,16 +329,34 @@ namespace XBPrice
         /// </summary>
         private async Task ApplyFitAsync()
         {
+            // 页面不在树上时直接放弃，绝不触碰 WebView2。
+            if (!_isLoaded)
+            {
+                return;
+            }
+
+            CoreWebView2 core = this.webview.CoreWebView2;
+
+            // 注意：这里刻意不调 EnsureCoreWebView2Async。
+            // WebView2 在控件已卸载后调用它属于未定义行为，会直接抛原生访问冲突，
+            // 而且是无法在 try/catch 里捕获的那种。等它自己就绪即可，
+            // 未就绪时 NavigationCompleted 也不会来，本方法没有执行的机会。
+            if (core is null)
+            {
+                return;
+            }
+
             try
             {
-                if (this.webview.CoreWebView2 is null)
-                {
-                    await this.webview.EnsureCoreWebView2Async();
-                }
-
                 // 先复位，保证量到的是 100% 下的真实内容宽度
                 await this.ApplyZoomToPageAsync(1.0);
                 await Task.Delay(150);
+
+                // 延迟期间页面可能已被卸载（用户切到数据库页）
+                if (!_isLoaded)
+                {
+                    return;
+                }
 
                 double viewportWidth = this.webview.ActualWidth;
                 if (viewportWidth <= 1)
@@ -284,7 +377,13 @@ namespace XBPrice
     return String(w || 0);
 })();";
 
-                string raw = await this.webview.CoreWebView2.ExecuteScriptAsync(measureScript);
+                core = this.webview.CoreWebView2;
+                if (core is null)
+                {
+                    return;
+                }
+
+                string raw = await core.ExecuteScriptAsync(measureScript);
                 double contentWidth = 0;
                 if (double.TryParse(raw?.Trim('"'), out double parsed) && parsed > 0)
                 {
@@ -308,10 +407,13 @@ namespace XBPrice
 
                 await this.SetZoomInternalAsync(target);
             }
-            catch
+            catch (Exception)
             {
-                // 适配失败不影响使用，退回一个保守缩放
-                await this.SetZoomInternalAsync(0.5);
+                // 适配失败不影响使用。这里只更新缩放文本、绝不再去动 WebView2——
+                // 原实现在 catch 里 await SetZoomInternalAsync，一旦二次抛出会从
+                // async void 逃逸并直接终止进程，那才是真正的崩溃。
+                this._zoom = 0.5;
+                this.UpdateZoomText();
             }
         }
 
@@ -353,8 +455,13 @@ namespace XBPrice
                     return;
                 }
 
-                // 确认存在工作日后才导航，避免把周末或非法日期页面加载进来
-                this.webview.Source = new Uri(websites[0].Url);
+                // 确认存在工作日后才导航，避免把周末或非法日期页面加载进来。
+                // 仅在页面挂上视觉树时才导航：否则 WebView2 原生对象可能已释放。
+                if (_isLoaded)
+                {
+                    this._pendingUrl = websites[0].Url;
+                    this.webview.Source = new Uri(websites[0].Url);
+                }
 
                 string startText = start.ToString("yyyy-MM-dd");
                 string endText = end.ToString("yyyy-MM-dd");

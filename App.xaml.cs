@@ -23,6 +23,38 @@ namespace XBPrice
         public App()
         {
             this.InitializeComponent();
+
+            // 全局兜底：把未处理的托管异常写进日志。
+            // 原生层的访问冲突（0xc0000005）无法在此捕获，但绝大多数
+            // 「点了按钮就崩」其实都是逃逸出 async void 的托管异常，
+            // 有这份日志就能直接定位，不必再靠猜。
+            this.UnhandledException += OnUnhandledException;
+        }
+
+        /// <summary>崩溃日志路径：程序目录下 unhandled.log。</summary>
+        private static string CrashLogPath => System.IO.Path.Combine(
+            AppContext.BaseDirectory, "unhandled.log");
+
+        /// <summary>
+        /// 记录未处理异常。标记为已处理，让程序继续跑——
+        /// 一次网络抖动不该让整个程序退出。
+        /// </summary>
+        private void OnUnhandledException(object sender,
+            Microsoft.UI.Xaml.UnhandledExceptionEventArgs e)
+        {
+            try
+            {
+                System.IO.File.AppendAllText(
+                    CrashLogPath,
+                    $"[{DateTime.Now:yyyy-MM-dd HH:mm:ss}] {e.Exception}{Environment.NewLine}"
+                    + new string('-', 60) + Environment.NewLine);
+            }
+            catch
+            {
+                // 日志写不了就算了，不能因此再抛一次
+            }
+
+            e.Handled = true;
         }
 
         /// <summary>

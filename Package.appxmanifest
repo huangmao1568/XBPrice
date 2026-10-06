@@ -18,7 +18,7 @@
   <Identity
     Name="huangdaxia.XBPrice"
     Publisher="CN=00543687-0CD2-4BAB-A8C1-74E7098AB9E5"
-    Version="1.0.0.0" />
+    Version="1.0.4.0" />
 
   <Properties>
     <DisplayName>XBPrice</DisplayName>
